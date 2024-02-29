@@ -24,12 +24,27 @@ impl<'c> Client<'c> {
     }
 
     pub async fn comptetions(&self, task: &str, input: &str) -> Result<String, Error> {
+        #[derive(Debug, serde::Deserialize)]
+        struct ChatCompletionMessage {
+            content: String,
+        }
+
+        #[derive(Debug, serde::Deserialize)]
+        struct ChatCompletionChoice {
+            message: ChatCompletionMessage,
+        }
+
+        #[derive(Debug, serde::Deserialize)]
+        struct ChatCompletionResponse {
+            choices: Vec<ChatCompletionChoice>,
+        }
+
         let endpoint = self
             .base_url
             .join("/v1/chat/completions")
             .expect("invald chat completions endpoint");
         let body = serde_json::json!({
-            "model": "text-embedding-3-large",
+            "model": "gpt-3.5-turbo",
             "messages": [
                 {"role": "system", "content": task},
                 {"role": "user", "content": input}
@@ -48,33 +63,28 @@ impl<'c> Client<'c> {
 
         let response_bytes = response.bytes().await.map_err(Error::Reqwest)?;
 
-        #[derive(Debug, serde::Deserialize)]
-        struct ChatCompletionMessage {
-            role: String,
-            content: String,
-        }
-
-        #[derive(Debug, serde::Deserialize)]
-        struct ChatCompletionChoice {
-            message: ChatCompletionMessage,
-        }
-
-        #[derive(Debug, serde::Deserialize)]
-        struct ChatCompletionResponse {
-            choices: Vec<ChatCompletionChoice>,
-        }
-
         let response = serde_json::from_slice::<Response<ChatCompletionResponse>>(&response_bytes)
             .map_err(Error::De);
 
         match response {
             Ok(Response::Ok(completion)) => Ok(completion.choices[0].message.content.clone()),
-            Ok(Response::Error { error }) => Err(Error::API(error)),
+            Ok(Response::Error { error }) => Err(Error::Api(error)),
             Err(e) => Err(e),
         }
     }
 
+    #[tracing::instrument(skip_all)]
     pub async fn embeddings(&self, input: &str) -> Result<Vec<f32>, Error> {
+        #[derive(Debug, serde::Deserialize)]
+        struct ListResponse<T> {
+            data: Vec<T>,
+        }
+
+        #[derive(Debug, serde::Deserialize)]
+        struct EmbeddingResponse {
+            embedding: Vec<f32>,
+        }
+
         let endpoint = self
             .base_url
             .join("/v1/embeddings")
@@ -92,23 +102,13 @@ impl<'c> Client<'c> {
 
         let response_bytes = response.bytes().await.map_err(Error::Reqwest)?;
 
-        #[derive(Debug, serde::Deserialize)]
-        struct ListResponse<T> {
-            data: Vec<T>,
-        }
-
-        #[derive(Debug, serde::Deserialize)]
-        struct EmbeddingResponse {
-            embedding: Vec<f32>,
-        }
-
         let response =
             serde_json::from_slice::<Response<ListResponse<EmbeddingResponse>>>(&response_bytes)
                 .map_err(Error::De);
 
         match response {
             Ok(Response::Ok(list)) => Ok(list.data[0].embedding.clone()),
-            Ok(Response::Error { error }) => Err(Error::API(error)),
+            Ok(Response::Error { error }) => Err(Error::Api(error)),
             Err(e) => Err(e),
         }
     }
@@ -123,7 +123,7 @@ pub enum Error {
     #[error(transparent)]
     De(serde_json::Error),
     #[error(transparent)]
-    API(ErrorResponse),
+    Api(ErrorResponse),
 }
 
 #[derive(Debug, serde::Deserialize, thiserror::Error)]

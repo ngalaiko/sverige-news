@@ -2,8 +2,6 @@ mod db;
 mod feeds;
 mod openai;
 
-use db::{Embedding, Persistent};
-
 use clap::Parser;
 use linfa::{metrics::SilhouetteScore, traits::Transformer, DatasetBase};
 use linfa_clustering::Dbscan;
@@ -19,50 +17,105 @@ struct Cli {
     database_file: std::path::PathBuf,
 }
 
-const EMBEDDING_SIZE: usize = 3072;
-
 #[tokio::main]
+#[allow(clippy::too_many_lines)]
 async fn main() {
+    let subscriber = tracing_subscriber::fmt::fmt()
+        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+        .finish();
+    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
+
     let cli = Cli::parse();
 
     let db = db::Client::new(cli.database_file)
         .await
         .expect("failed to create db client");
+    let openai_client = openai::Client::new(&cli.openai_base_url, &cli.openai_token);
+    let crawler = feeds::Crawler::default();
 
     let feeds = db.list_feeds().await.expect("failed to list feeds");
 
-    let crawler = feeds::Crawler::default();
     let entries = futures::future::try_join_all(feeds.iter().map(|feed| crawler.crawl(feed)))
         .await
         .unwrap();
 
-    for entry in entries.iter().flatten() {
-        match db.insert_entry(entry).await {
-            Ok(_) => {}
-            Err(error)
-                if error
-                    .as_database_error()
-                    .map(sqlx::error::DatabaseError::kind)
-                    == Some(sqlx::error::ErrorKind::UniqueViolation) => {}
-            Err(error) => {
-                panic!("{}", error);
-            }
+    for (entry, fields) in entries.into_iter().flatten() {
+        let entry = db
+            .insert_entry(&entry)
+            .await
+            .expect("failed to insert entry");
+        let fields = fields.into_iter().map(|(name, lang_code, value)| {
+            let md5_hash = md5::compute(&value);
+            (
+                feeds::Field {
+                    entry_id: entry.id,
+                    name,
+                    lang_code,
+                    md5_hash,
+                },
+                feeds::Translation {
+                    value: value.to_string(),
+                    md5_hash,
+                },
+            )
+        });
+        for (sv_field, sv_translation) in fields {
+            db.insert_field(&sv_field)
+                .await
+                .expect("failed to insert field");
+            db.insert_translation(&sv_translation)
+                .await
+                .expect("failed to insert translation");
         }
     }
 
-    let entries = db
-        .list_entries_without_embeddings()
+    let untranslated_sv_fields = db
+        .list_sv_fields_without_en_translation()
         .await
         .expect("failed to list entries without embeddings");
-
-    let openai_client = openai::Client::new(&cli.openai_base_url, &cli.openai_token);
-    for entry in entries {
-        let embedding = openai_client
-            .embeddings(&entry.1.title)
+    for sv_field in untranslated_sv_fields {
+        let sv_translation = db
+            .find_translation_by_md5_hash(&sv_field.value.md5_hash)
             .await
-            .expect("failed to fetch embeddings");
-        let embedding = Embedding {
-            entry_id: entry.0,
+            .expect("failed to query translation by md5 hash");
+
+        let translation = translate_sv_to_en(&openai_client, &sv_translation.value.value)
+            .await
+            .expect("failed to translate");
+
+        let en_translation = feeds::Translation {
+            md5_hash: md5::compute(&translation),
+            value: translation,
+        };
+        db.insert_translation(&en_translation)
+            .await
+            .expect("failed to insert en translation");
+
+        let en_field = feeds::Field {
+            lang_code: feeds::LanguageCode::EN,
+            md5_hash: en_translation.md5_hash,
+            ..sv_field.value
+        };
+        db.insert_field(&en_field)
+            .await
+            .expect("failed to insert en field");
+    }
+
+    let translations_without_embeddings = db
+        .list_en_translations_without_embeddings()
+        .await
+        .expect("failed to list translations without embeddings");
+    for translation in translations_without_embeddings {
+        let embedding = openai_client
+            .embeddings(&translation.value.value)
+            .await
+            .expect("failed to get embeddings");
+        let embedding = db::Embedding {
+            md5_hash: translation.value.md5_hash,
+            size: embedding
+                .len()
+                .try_into()
+                .expect("failed to convert usize into u32"),
             value: embedding,
         };
         db.insert_embeddig(&embedding)
@@ -71,33 +124,61 @@ async fn main() {
     }
 
     let today_entries = db
-        .query_enteies_for_date(chrono::Utc::now().date_naive())
+        .list_entries_for_date(chrono::Utc::now().date_naive())
         .await
         .expect("failed to query entries for time range");
 
-    let today_embeddings = futures::future::try_join_all(
+    let today_entries_en_title_fields = futures::future::try_join_all(
         today_entries
             .iter()
-            .map(|entry| db.query_embeddings_by_entry_id(entry.0)),
+            .map(|entry| db.find_en_title_by_entry_id(entry.id)),
     )
     .await
     .expect("failed to query embeddings by entry id");
 
-    let clusters = group_embeddings_best(&today_embeddings, 2, 0.1..=1.0).await;
+    let today_en_title_embeddings = futures::future::try_join_all(
+        today_entries_en_title_fields
+            .iter()
+            .map(|field| db.find_embedding_by_md5_hash(&field.value.md5_hash)),
+    )
+    .await
+    .expect("failed to query embeddings by md5 hash");
+
+    let clusters = group_embeddings_best(&today_en_title_embeddings, 2, 0.75..=1.0).await;
+    let mut report = vec![];
     for cluster in clusters {
-        println!("");
+        report.push("---".to_string());
         for index in cluster {
+            let title = today_entries_en_title_fields
+                .get(index)
+                .expect("got invalid clusring index");
             let entry = today_entries
                 .get(index)
                 .expect("got invalud clusring index");
-            println!("- {} ({})", entry.1.title, entry.1.href);
+            let en_translation = db
+                .find_translation_by_md5_hash(&title.value.md5_hash)
+                .await
+                .expect("failed to query en title by entry id");
+
+            report.push(format!("- {} ({})", en_translation.value.value, entry.value.href));
         }
     }
+
+    println!("{}", report.join("\n"));
+}
+
+#[tracing::instrument(skip_all)]
+async fn translate_sv_to_en(
+    client: &openai::Client<'_>,
+    value: &str,
+) -> Result<String, openai::Error> {
+    let task = "You are a highly skilled and concise professional translator. When you receive a sentence in Swedish, your task is to translate it into English. VERY IMPORTANT: Do not output any notes, explanations, alternatives or comments after or before the translation.";
+    client.comptetions(task, value).await
 }
 
 // find the best tolerance using binary search
 async fn group_embeddings_best(
-    embeddings: &[Persistent<Embedding>],
+    embeddings: &[db::Persisted<db::Embedding>],
     min_points: usize,
     range: std::ops::RangeInclusive<f32>,
 ) -> Vec<Vec<usize>> {
@@ -109,7 +190,7 @@ async fn group_embeddings_best(
             break;
         }
 
-        println!("attempt {} with range {:?}", attempt, range);
+        println!("attempt {attempt} with range {range:?}",);
 
         let (left_result, right_result) = futures::join!(
             group_embeddings(embeddings, min_points, *range.start()),
@@ -144,7 +225,7 @@ async fn group_embeddings_best(
 }
 
 async fn group_embeddings(
-    embeddings: &[Persistent<Embedding>],
+    embeddings: &[db::Persisted<db::Embedding>],
     min_points: usize,
     tolerance: f32,
 ) -> (Vec<Vec<usize>>, f32) {
@@ -153,13 +234,14 @@ async fn group_embeddings(
     let embeddings_len = embeddings.len();
     let vectors = embeddings
         .iter()
-        .flat_map(|embedding| embedding.1.value.iter().cloned())
+        .flat_map(|embedding| embedding.value.value.iter().copied())
         .collect::<Vec<_>>();
+
+    let size: usize = embeddings[0].value.size.try_into().expect("invalid size");
 
     rayon::spawn(move || {
         let vectors: Array2<f32> =
-            Array2::from_shape_vec((embeddings_len, EMBEDDING_SIZE), vectors)
-                .expect("invalid shape");
+            Array2::from_shape_vec((embeddings_len, size), vectors).expect("invalid shape");
 
         let dataset: DatasetBase<_, _> = vectors.into();
 
@@ -178,8 +260,8 @@ async fn group_embeddings(
             .filter_map(|(target, index)| target.map(|target| (target, index)))
             .fold(
                 std::collections::HashMap::new(),
-                |mut acc, (target, index)| {
-                    acc.entry(target).or_insert_with(Vec::new).push(index);
+                |mut acc: std::collections::HashMap<usize, Vec<usize>>, (target, index)| {
+                    acc.entry(target).or_default().push(index);
                     acc
                 },
             )

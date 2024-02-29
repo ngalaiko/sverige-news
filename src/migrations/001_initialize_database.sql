@@ -1,7 +1,8 @@
 CREATE TABLE IF NOT EXISTS feeds (
     id integer PRIMARY KEY AUTOINCREMENT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    /* --- */
     href text NOT NULL,
-    fetched_at DATETIME,
     title text NOT NULL
 );
 
@@ -23,14 +24,36 @@ INSERT INTO feeds (title, href)
 
 CREATE TABLE IF NOT EXISTS entries (
     id integer PRIMARY KEY AUTOINCREMENT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     href text NOT NULL UNIQUE,
     feed_id integer NOT NULL,
-    title text NOT NULL,
     published_at DATETIME NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS fields (
+    id integer PRIMARY KEY AUTOINCREMENT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    /* --- */
+    entry_id integer NOT NULL,
+    name text NOT NULL,
+    lang_code text NOT NULL,
+    md5_hash BINARY NOT NULL,
+    UNIQUE(entry_id, name, lang_code)
+);
+
+CREATE TABLE IF NOT EXISTS translations (
+    id integer PRIMARY KEY AUTOINCREMENT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    /* --- */
+    md5_hash BINARY NOT NULL UNIQUE,
+    value text NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS embeddings (
     id integer PRIMARY KEY AUTOINCREMENT,
-    entry_id integer NOT NULL UNIQUE,
-    value text NOT NULL
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    /* --- */
+    md5_hash BINARY NOT NULL UNIQUE,
+    value text NOT NULL,
+    size integer NOT NULL
 );
