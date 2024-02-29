@@ -21,7 +21,10 @@ struct Cli {
 #[allow(clippy::too_many_lines)]
 async fn main() {
     let subscriber = tracing_subscriber::fmt::fmt()
-        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+        .with_span_events(
+            tracing_subscriber::fmt::format::FmtSpan::NEW
+                | tracing_subscriber::fmt::format::FmtSpan::CLOSE,
+        )
         .finish();
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
@@ -102,7 +105,7 @@ async fn main() {
     }
 
     let translations_without_embeddings = db
-        .list_en_translations_without_embeddings()
+        .list_translations_without_embeddings(feeds::LanguageCode::EN)
         .await
         .expect("failed to list translations without embeddings");
     for translation in translations_without_embeddings {
@@ -131,7 +134,7 @@ async fn main() {
     let today_entries_en_title_fields = futures::future::try_join_all(
         today_entries
             .iter()
-            .map(|entry| db.find_en_title_by_entry_id(entry.id)),
+            .map(|entry| db.find_title_by_entry_id(entry.id, feeds::LanguageCode::EN)),
     )
     .await
     .expect("failed to query embeddings by entry id");
@@ -144,27 +147,56 @@ async fn main() {
     .await
     .expect("failed to query embeddings by md5 hash");
 
-    let clusters = group_embeddings_best(&today_en_title_embeddings, 2, 0.75..=1.0).await;
-    let mut report = vec![];
-    for cluster in clusters {
-        report.push("---".to_string());
-        for index in cluster {
-            let title = today_entries_en_title_fields
-                .get(index)
-                .expect("got invalid clusring index");
-            let entry = today_entries
-                .get(index)
-                .expect("got invalud clusring index");
-            let en_translation = db
-                .find_translation_by_md5_hash(&title.value.md5_hash)
-                .await
-                .expect("failed to query en title by entry id");
+      let (clusters, score) = group_embeddings_best(&today_en_title_embeddings, 2, 0.75..=1.0).await;
+      let report = db::Report {
+          groups: clusters
+              .into_iter()
+              .map(|cluster| {
+                  cluster
+                      .into_iter()
+                      .map(|i| today_entries[i].id)
+                      .collect::<Vec<_>>()
+              })
+              .collect::<Vec<_>>(),
+          score,
+      };
 
-            report.push(format!("- {} ({})", en_translation.value.value, entry.value.href));
+      db.insert_report(&report)
+          .await
+          .expect("failed to insert report");
+
+    let latest_report = db
+        .find_latest_report()
+        .await
+        .expect("failed to find latest report");
+
+    let mut lines = vec![];
+    for group in latest_report.value.groups {
+        lines.push(String::new());
+        for entry_id in group {
+            let entry = db
+                .find_entry_by_id(entry_id)
+                .await
+                .expect("failed to find entry by id");
+
+            let entry_title = db
+                .find_title_by_entry_id(entry_id, feeds::LanguageCode::EN)
+                .await
+                .expect("failed to find title by entry id");
+
+            let en_entry_title = db
+                .find_translation_by_md5_hash(&entry_title.value.md5_hash)
+                .await
+                .expect("failed to find translation by md5 hash");
+
+            lines.push(format!(
+                "- {} ({})",
+                en_entry_title.value.value, entry.value.href
+            ));
         }
     }
 
-    println!("{}", report.join("\n"));
+    std::fs::write("./report.txt", lines.join("\n")).expect("failed to save report");
 }
 
 #[tracing::instrument(skip_all)]
@@ -181,21 +213,17 @@ async fn group_embeddings_best(
     embeddings: &[db::Persisted<db::Embedding>],
     min_points: usize,
     range: std::ops::RangeInclusive<f32>,
-) -> Vec<Vec<usize>> {
+) -> (Vec<Vec<usize>>, f32) {
     let mut range = range;
     let mut best_result = (Vec::new(), -1.0);
-    let mut attempt = 1;
+
+    let (mut left_result, mut right_result) = futures::join!(
+        group_embeddings(embeddings, min_points, *range.start()),
+        group_embeddings(embeddings, min_points, *range.end()),
+    );
+
     loop {
-        if attempt == 10 {
-            break;
-        }
-
-        println!("attempt {attempt} with range {range:?}",);
-
-        let (left_result, right_result) = futures::join!(
-            group_embeddings(embeddings, min_points, *range.start()),
-            group_embeddings(embeddings, min_points, *range.end()),
-        );
+        println!("range {range:?}");
 
         println!("tolerance: {}, score: {:}", *range.start(), left_result.1);
         println!("tolerance: {}, score: {:}", *range.end(), right_result.1);
@@ -210,20 +238,24 @@ async fn group_embeddings_best(
         }
 
         let center = (*range.start() + *range.end()) / 2.0;
+        let center_result = group_embeddings(embeddings, min_points, center).await;
+
         if left_result.1 > right_result.1 {
             range = *range.start()..=center;
+            right_result = center_result;
         } else if right_result.1 > left_result.1 {
             range = center..=*range.end();
+            left_result = center_result;
         } else {
+            // ranges are equal, break
             break;
         };
-
-        attempt += 1;
     }
 
-    best_result.0
+    best_result
 }
 
+#[tracing::instrument(skip(embeddings), fields(embeddings_len = embeddings.len()))]
 async fn group_embeddings(
     embeddings: &[db::Persisted<db::Embedding>],
     min_points: usize,

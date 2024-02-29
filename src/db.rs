@@ -1,4 +1,4 @@
-use crate::feeds::{self, Entry};
+use crate::feeds;
 
 pub struct Client {
     pool: sqlx::SqlitePool,
@@ -45,9 +45,23 @@ impl Client {
         }
     }
 
-    async fn find_entry(&self, entry: &Entry) -> Result<Persisted<feeds::Entry>, sqlx::Error> {
+    async fn find_entry(
+        &self,
+        entry: &feeds::Entry,
+    ) -> Result<Persisted<feeds::Entry>, sqlx::Error> {
         sqlx::query_as("SELECT * FROM entries WHERE href = ?")
             .bind(entry.href.to_string())
+            .fetch_one(&self.pool)
+            .await
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub async fn find_entry_by_id(
+        &self,
+        id: Id<feeds::Entry>,
+    ) -> Result<Persisted<feeds::Entry>, sqlx::Error> {
+        sqlx::query_as("SELECT * FROM entries WHERE id = ?")
+            .bind(id)
             .fetch_one(&self.pool)
             .await
     }
@@ -118,14 +132,16 @@ impl Client {
     }
 
     #[tracing::instrument(skip(self))]
-    pub async fn find_en_title_by_entry_id(
+    pub async fn find_title_by_entry_id(
         &self,
         entry_id: Id<feeds::Entry>,
+        language_code: feeds::LanguageCode,
     ) -> Result<Persisted<feeds::Field>, sqlx::Error> {
         sqlx::query_as(
-            "SELECT * FROM fields WHERE entry_id = ? AND name = 'title' AND lang_code = 'en'",
+            "SELECT * FROM fields WHERE entry_id = ? AND name = 'title' AND lang_code = ?",
         )
         .bind(u32::from(entry_id))
+        .bind(language_code.to_string())
         .fetch_one(&self.pool)
         .await
     }
@@ -228,10 +244,12 @@ impl Client {
     }
 
     #[tracing::instrument(skip(self))]
-    pub async fn list_en_translations_without_embeddings(
+    pub async fn list_translations_without_embeddings(
         &self,
+        language_code: feeds::LanguageCode,
     ) -> Result<Vec<Persisted<feeds::Translation>>, sqlx::Error> {
-        sqlx::query_as("SELECT translations.* FROM translations JOIN fields on fields.md5_hash = translations.md5_hash AND fields.lang_code = 'en' WHERE NOT EXISTS (SELECT 1 FROM embeddings WHERE embeddings.md5_hash = translations.md5_hash)")
+        sqlx::query_as("SELECT translations.* FROM translations JOIN fields on fields.md5_hash = translations.md5_hash AND fields.lang_code = ? WHERE NOT EXISTS (SELECT 1 FROM embeddings WHERE embeddings.md5_hash = translations.md5_hash)")
+            .bind(language_code.to_string())
             .fetch_all(&self.pool)
             .await
     }
@@ -243,6 +261,96 @@ impl Client {
         sqlx::query_as("SELECT * FROM feeds")
             .fetch_all(&self.pool)
             .await
+    }
+}
+
+impl Client {
+    pub async fn insert_report(&self, report: &Report) -> Result<Persisted<Report>, sqlx::Error> {
+        use sqlx::Row;
+
+        let report_insert_result =
+            sqlx::query("INSERT INTO reports (score) VALUES (?) RETURNING id, created_at")
+                .bind(report.score)
+                .fetch_one(&self.pool)
+                .await?;
+        let report_id: u32 = report_insert_result.try_get("id")?;
+        let report_created_at: chrono::DateTime<chrono::Utc> =
+            report_insert_result.try_get("created_at")?;
+
+        for group in &report.groups {
+            let group_insert_result =
+                sqlx::query("INSERT INTO report_groups (report_id) VALUES (?) RETURNING id")
+                    .bind(report_id)
+                    .fetch_one(&self.pool)
+                    .await?;
+            let group_id: u32 = group_insert_result.try_get("id")?;
+
+            for embedding_id in group {
+                sqlx::query(
+                    "INSERT INTO report_group_embeddings (report_group_id, embedding_id) VALUES (?, ?)",
+                )
+                .bind(group_id)
+                .bind(embedding_id)
+                .execute(&self.pool)
+                .await?;
+            }
+        }
+
+        Ok(Persisted {
+            id: Id::from(report_id),
+            created_at: report_created_at,
+            value: report.clone(),
+        })
+    }
+
+    pub async fn find_latest_report(&self) -> Result<Persisted<Report>, sqlx::Error> {
+        use sqlx::Row;
+
+        let report_result = sqlx::query(
+            "SELECT id, created_at, score FROM reports ORDER BY created_at DESC LIMIT 1",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        let report_id: u32 = report_result.try_get("id")?;
+        let report_created_at: chrono::DateTime<chrono::Utc> =
+            report_result.try_get("created_at")?;
+        let score = report_result.try_get("score")?;
+
+        let mut report = Report {
+            score,
+            groups: vec![],
+        };
+
+        let report_groups_result = sqlx::query("SELECT id FROM report_groups WHERE report_id = ?")
+            .bind(report_id)
+            .fetch_all(&self.pool)
+            .await?;
+
+        for group in report_groups_result {
+            let group_id: u32 = group.try_get("id")?;
+            let group_embeddings_results = sqlx::query(
+                "SELECT embedding_id FROM report_group_embeddings WHERE report_group_id = ?",
+            )
+            .bind(group_id)
+            .fetch_all(&self.pool)
+            .await?;
+
+            let embedding_ids = group_embeddings_results
+                .into_iter()
+                .map(|result| result.try_get("embedding_id"))
+                .collect::<Result<Vec<u32>, sqlx::Error>>()?;
+
+            let embedding_ids = embedding_ids.into_iter().map(Id::from).collect();
+
+            report.groups.push(embedding_ids);
+        }
+
+        Ok(Persisted {
+            id: Id::from(report_id),
+            created_at: report_created_at,
+            value: report,
+        })
     }
 }
 
@@ -440,4 +548,10 @@ impl sqlx::FromRow<'_, sqlx::sqlite::SqliteRow> for Persisted<feeds::Translation
             },
         })
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct Report {
+    pub score: f32,
+    pub groups: Vec<Vec<Id<feeds::Entry>>>,
 }
