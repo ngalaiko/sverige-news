@@ -12,7 +12,7 @@ impl Client {
 
         let pool = sqlx::SqlitePool::connect_with(opts).await?;
 
-        sqlx::migrate!("src/migrations").run(&pool).await?;
+        sqlx::migrate!("./migrations").run(&pool).await?;
         Ok(Self { pool })
     }
 }
@@ -191,36 +191,41 @@ impl Client {
 
 impl Client {
     pub async fn insert_report(&self, report: &Report) -> Result<Persisted<Report>, sqlx::Error> {
-        use sqlx::Row;
+        use sqlx::{Executor, Row};
 
-        let report_insert_result =
-            sqlx::query("INSERT INTO reports (score) VALUES (?) RETURNING id, created_at")
-                .bind(report.score)
-                .fetch_one(&self.pool)
-                .await?;
+        let mut transaction = self.pool.begin().await?;
+
+        let report_insert_result = transaction
+            .fetch_one(
+                sqlx::query("INSERT INTO reports (score) VALUES (?) RETURNING id, created_at")
+                    .bind(report.score),
+            )
+            .await?;
 
         let report_id: u32 = report_insert_result.try_get("id")?;
         let report_created_at: chrono::DateTime<chrono::Utc> =
             report_insert_result.try_get("created_at")?;
 
-        for group in &report.groups {
-            let group_insert_result =
-                sqlx::query("INSERT INTO report_groups (report_id) VALUES (?) RETURNING id")
-                    .bind(report_id)
-                    .fetch_one(&self.pool)
-                    .await?;
+        for embedding_ids in &report.groups {
+            let group_insert_result = transaction
+                .fetch_one(
+                    sqlx::query("INSERT INTO report_groups (report_id) VALUES (?) RETURNING id")
+                        .bind(report_id),
+                )
+                .await?;
             let group_id: u32 = group_insert_result.try_get("id")?;
 
-            for embedding_id in group {
-                sqlx::query(
-                    "INSERT INTO report_group_embeddings (report_group_id, embedding_id) VALUES (?, ?)",
-                )
-                .bind(group_id)
-                .bind(embedding_id)
-                .execute(&self.pool)
-                .await?;
+            for embedding_id in embedding_ids {
+                transaction
+                        .execute(
+                            sqlx::query("INSERT INTO report_group_embeddings (report_group_id, embedding_id) VALUES (?, ?)")
+                                .bind(group_id)
+                                .bind(embedding_id),
+                        ).await?;
             }
         }
+
+        transaction.commit().await?;
 
         Ok(Persisted {
             id: Id::from(report_id),
@@ -253,23 +258,10 @@ impl Client {
             .fetch_all(&self.pool)
             .await?;
 
-        for group in report_groups_result {
-            let group_id: u32 = group.try_get("id")?;
-            let group_embeddings_results = sqlx::query(
-                "SELECT embedding_id FROM report_group_embeddings WHERE report_group_id = ?",
-            )
-            .bind(group_id)
-            .fetch_all(&self.pool)
-            .await?;
-
-            let embedding_ids = group_embeddings_results
-                .into_iter()
-                .map(|result| result.try_get("embedding_id"))
-                .collect::<Result<Vec<u32>, sqlx::Error>>()?;
-
-            let embedding_ids = embedding_ids.into_iter().map(Id::from).collect();
-
-            report.groups.push(embedding_ids);
+        for group_result in report_groups_result {
+            let group_id = group_result.try_get::<u32, _>("id")?;
+            let group_embeddings = self.list_group_embedding_ids(group_id).await?;
+            report.groups.push(group_embeddings);
         }
 
         Ok(Persisted {
@@ -277,6 +269,25 @@ impl Client {
             created_at: report_created_at,
             value: report,
         })
+    }
+
+    async fn list_group_embedding_ids(
+        &self,
+        group_id: u32,
+    ) -> Result<Vec<Id<Embedding>>, sqlx::Error> {
+        use sqlx::Row;
+
+        let group_embeddings_results = sqlx::query(
+            "SELECT embedding_id FROM report_group_embeddings WHERE report_group_id = ?",
+        )
+        .bind(group_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        group_embeddings_results
+            .into_iter()
+            .map(|result| result.try_get::<u32, _>("embedding_id").map(Id::from))
+            .collect::<Result<_, _>>()
     }
 }
 
