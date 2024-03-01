@@ -42,6 +42,7 @@ async fn main() {
         .await
         .expect("failed to create db client");
     let openai_client = openai::Client::new(&cli.openai_base_url, &cli.openai_token);
+    let translator = openai::Translator::new(&openai_client);
     let crawler = feeds::Crawler::default();
 
     fetch_feeds(&db, &crawler)
@@ -58,7 +59,8 @@ async fn main() {
             .await
             .expect("failed to query translation by md5 hash");
 
-        let translation = translate_sv_to_en(&openai_client, &sv_translation.value.value)
+        let translation = translator
+            .translate_sv_to_en(&sv_translation.value.value)
             .await
             .expect("failed to translate");
 
@@ -196,15 +198,6 @@ async fn fetch_feeds(db: &db::Client, crawler: &feeds::Crawler) -> Result<(), Fe
     }
 
     Ok(())
-}
-
-#[tracing::instrument(skip_all)]
-async fn translate_sv_to_en(
-    client: &openai::Client<'_>,
-    value: &str,
-) -> Result<String, openai::Error> {
-    let task = "You are a highly skilled and concise professional translator. When you receive a sentence in Swedish, your task is to translate it into English. VERY IMPORTANT: Do not output any notes, explanations, alternatives or comments after or before the translation.";
-    client.comptetions(task, value).await
 }
 
 // find the best tolerance using binary search
