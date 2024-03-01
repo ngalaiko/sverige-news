@@ -10,6 +10,7 @@ pub async fn group_embeddings(
     range: std::ops::RangeInclusive<f32>,
 ) -> (Vec<Vec<db::Id<db::Embedding>>>, f32) {
     let shape = (embeddings.len(), embeddings[0].value.size as usize);
+    // try to reducing dimentions
     let vectors = embeddings
         .iter()
         .flat_map(|embedding| embedding.value.value.iter().copied())
@@ -25,11 +26,6 @@ pub async fn group_embeddings(
     );
 
     loop {
-        println!("range {range:?}");
-
-        println!("tolerance: {}, score: {:}", *range.start(), left_result.1);
-        println!("tolerance: {}, score: {:}", *range.end(), right_result.1);
-
         if left_result.1 > best_result.1 {
             best_result = left_result.clone();
         } else if right_result.1 > best_result.1 {
@@ -103,6 +99,8 @@ async fn group_vectors(
             .values()
             .cloned()
             .collect::<Vec<_>>();
+
+        tracing::info!(score = ?silhouette_score, clusters_len = clustered_indices.len());
 
         let _ = send.send((clustered_indices, silhouette_score));
     });

@@ -2,6 +2,7 @@ mod clustering;
 mod db;
 mod feeds;
 mod openai;
+mod web;
 
 use clap::{Parser, Subcommand};
 
@@ -20,6 +21,10 @@ enum Commands {
         openai_token: String,
         #[arg(long, default_value = "https://api.openai.com/")]
         openai_base_url: url::Url,
+    },
+    Serve {
+        #[arg(long, default_value = "127.0.0.1:8080")]
+        address: String,
     },
 }
 
@@ -43,10 +48,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             openai_token,
             openai_base_url,
         } => fetch(&db, &openai_token, &openai_base_url).await,
+        Commands::Serve { address } => web::serve(&db, &address).await,
     }
 }
 
-#[allow(clippy::too_many_lines)]
 async fn fetch(
     db: &db::Client,
     openai_token: &str,
@@ -56,50 +61,9 @@ async fn fetch(
     let translator = openai::Translator::new(&openai_client);
     let crawler = feeds::Crawler::default();
 
-    fetch_feeds(db, &crawler).await?;
-
-    let untranslated_sv_fields = db.list_sv_fields_without_en_translation().await?;
-
-    for sv_field in untranslated_sv_fields {
-        let sv_translation = db
-            .find_translation_by_md5_hash(&sv_field.value.md5_hash)
-            .await?;
-
-        let translation = translator
-            .translate_sv_to_en(&sv_translation.value.value)
-            .await?;
-
-        let en_translation = feeds::Translation {
-            md5_hash: md5::compute(&translation),
-            value: translation,
-        };
-        db.insert_translation(&en_translation).await?;
-
-        let en_field = feeds::Field {
-            lang_code: feeds::LanguageCode::EN,
-            md5_hash: en_translation.md5_hash,
-            ..sv_field.value
-        };
-        db.insert_field(&en_field).await?;
-    }
-
-    let translations_without_embeddings = db
-        .list_translations_without_embeddings(feeds::LanguageCode::EN)
-        .await?;
-
-    for translation in translations_without_embeddings {
-        let embedding = openai_client.embeddings(&translation.value.value).await?;
-
-        let embedding = db::Embedding {
-            md5_hash: translation.value.md5_hash,
-            size: embedding
-                .len()
-                .try_into()
-                .expect("failed to convert usize into u32"),
-            value: embedding,
-        };
-        db.insert_embeddig(&embedding).await?;
-    }
+    crawl(db, &crawler).await?;
+    translate(db, &translator).await?;
+    generate_embedding(db, &openai_client).await?;
 
     let today_en_title_embeddings = db
         .list_embeddings_by_field_name_lang_code_date(
@@ -109,46 +73,23 @@ async fn fetch(
         )
         .await?;
 
-    let (clusters, score) =
+    let (groups, score) =
         clustering::group_embeddings(&today_en_title_embeddings, 2, 0.75..=1.0).await;
-    let report = db::Report {
-        groups: clusters,
-        score,
-    };
 
-    db.insert_report(&report).await?;
+    let report = db.insert_report(&db::Report { score }).await?;
 
-    let latest_report = db.find_latest_report().await?;
-
-    let mut lines = vec![];
-    for group in latest_report.value.groups {
-        lines.push(String::new());
-        for embedding_id in group {
-            let embedding = db.find_embedding_by_id(embedding_id).await?;
-
-            let translation = db
-                .find_translation_by_md5_hash(&embedding.value.md5_hash)
-                .await?;
-
-            let fields = db.list_fields_md5_hash(&embedding.value.md5_hash).await?;
-
-            for field in fields {
-                let entry = db.find_entry_by_id(field.value.entry_id).await?;
-
-                lines.push(format!(
-                    "- {} ({})",
-                    translation.value.value, entry.value.href
-                ));
-            }
-        }
+    for embedding_ids in groups {
+        let group = db::ReportGroup {
+            report_id: report.id,
+            embedding_ids,
+        };
+        db.insert_report_group(&group).await?;
     }
-
-    std::fs::write("./report.txt", lines.join("\n")).expect("failed to save report");
 
     Ok(())
 }
 
-async fn fetch_feeds(
+async fn crawl(
     db: &db::Client,
     crawler: &feeds::Crawler,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -184,5 +125,60 @@ async fn fetch_feeds(
         }
     }
 
+    Ok(())
+}
+
+async fn translate(
+    db: &db::Client,
+    translator: &openai::Translator<'_>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let untranslated_sv_fields = db.list_sv_fields_without_en_translation().await?;
+
+    for sv_field in untranslated_sv_fields {
+        let sv_translation = db
+            .find_translation_by_md5_hash(&sv_field.value.md5_hash)
+            .await?;
+
+        let translation = translator
+            .translate_sv_to_en(&sv_translation.value.value)
+            .await?;
+
+        let en_translation = feeds::Translation {
+            md5_hash: md5::compute(&translation),
+            value: translation,
+        };
+        db.insert_translation(&en_translation).await?;
+
+        let en_field = feeds::Field {
+            lang_code: feeds::LanguageCode::EN,
+            md5_hash: en_translation.md5_hash,
+            ..sv_field.value
+        };
+        db.insert_field(&en_field).await?;
+    }
+
+    Ok(())
+}
+
+async fn generate_embedding(
+    db: &db::Client,
+    openai_client: &openai::Client<'_>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let translations_without_embeddings = db
+        .list_translations_without_embeddings(feeds::LanguageCode::EN)
+        .await?;
+    for translation in translations_without_embeddings {
+        let embedding = openai_client.embeddings(&translation.value.value).await?;
+
+        let embedding = db::Embedding {
+            md5_hash: translation.value.md5_hash,
+            size: embedding
+                .len()
+                .try_into()
+                .expect("failed to convert usize into u32"),
+            value: embedding,
+        };
+        db.insert_embeddig(&embedding).await?;
+    }
     Ok(())
 }

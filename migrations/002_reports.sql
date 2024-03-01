@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS reports (
 
 CREATE TABLE IF NOT EXISTS report_groups (
     id integer PRIMARY KEY AUTOINCREMENT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     report_id integer NOT NULL
 );
 

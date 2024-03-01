@@ -1,6 +1,6 @@
 use crate::db;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Feed {
     pub href: url::Url,
     pub title: String,
@@ -80,7 +80,7 @@ pub struct Field {
     pub md5_hash: md5::Digest,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Translation {
     pub md5_hash: md5::Digest,
     pub value: String,

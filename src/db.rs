@@ -1,5 +1,6 @@
 use crate::feeds;
 
+#[derive(Clone)]
 pub struct Client {
     pool: sqlx::SqlitePool,
 }
@@ -70,7 +71,7 @@ impl Client {
     }
 
     #[tracing::instrument(skip(self))]
-    pub async fn list_fields_md5_hash(
+    pub async fn list_fields_by_md5_hash(
         &self,
         md5_hash: &md5::Digest,
     ) -> Result<Vec<Persisted<feeds::Field>>, sqlx::Error> {
@@ -133,7 +134,7 @@ impl Client {
     #[tracing::instrument(skip(self))]
     pub async fn find_embedding_by_id(
         &self,
-        id: Id<Embedding>,
+        id: &Id<Embedding>,
     ) -> Result<Persisted<Embedding>, sqlx::Error> {
         sqlx::query_as("SELECT * FROM embeddings WHERE id = ?")
             .bind(id)
@@ -187,111 +188,160 @@ impl Client {
             .fetch_all(&self.pool)
             .await
     }
+
+    #[tracing::instrument(skip(self))]
+    pub async fn find_feed_by_id(
+        &self,
+        id: Id<feeds::Feed>,
+    ) -> Result<Persisted<feeds::Feed>, sqlx::Error> {
+        sqlx::query_as("SELECT * FROM feeds WHERE id = ?")
+            .bind(id)
+            .fetch_one(&self.pool)
+            .await
+    }
 }
 
 impl Client {
-    pub async fn insert_report(&self, report: &Report) -> Result<Persisted<Report>, sqlx::Error> {
+    #[tracing::instrument(skip_all)]
+    pub async fn insert_report_group(
+        &self,
+        group: &ReportGroup,
+    ) -> Result<Persisted<ReportGroup>, sqlx::Error> {
         use sqlx::{Executor, Row};
 
         let mut transaction = self.pool.begin().await?;
 
-        let report_insert_result = transaction
+        let group_insert_result = transaction
             .fetch_one(
-                sqlx::query("INSERT INTO reports (score) VALUES (?) RETURNING id, created_at")
-                    .bind(report.score),
+                sqlx::query("INSERT INTO report_groups (report_id) VALUES (?) RETURNING id")
+                    .bind(group.report_id),
             )
             .await?;
+        let group_id: u32 = group_insert_result.try_get("id")?;
 
-        let report_id: u32 = report_insert_result.try_get("id")?;
-        let report_created_at: chrono::DateTime<chrono::Utc> =
-            report_insert_result.try_get("created_at")?;
-
-        for embedding_ids in &report.groups {
-            let group_insert_result = transaction
-                .fetch_one(
-                    sqlx::query("INSERT INTO report_groups (report_id) VALUES (?) RETURNING id")
-                        .bind(report_id),
-                )
-                .await?;
-            let group_id: u32 = group_insert_result.try_get("id")?;
-
-            for embedding_id in embedding_ids {
-                transaction
-                        .execute(
-                            sqlx::query("INSERT INTO report_group_embeddings (report_group_id, embedding_id) VALUES (?, ?)")
-                                .bind(group_id)
-                                .bind(embedding_id),
-                        ).await?;
-            }
+        for embedding_id in &group.embedding_ids {
+            transaction
+                                .execute(
+                                    sqlx::query("INSERT INTO report_group_embeddings (report_group_id, embedding_id) VALUES (?, ?)")
+                                        .bind(group_id)
+                                        .bind(embedding_id),
+                                ).await?;
         }
 
         transaction.commit().await?;
 
         Ok(Persisted {
-            id: Id::from(report_id),
-            created_at: report_created_at,
-            value: report.clone(),
+            id: Id::from(group_id),
+            created_at: chrono::Utc::now(),
+            value: group.clone(),
         })
     }
 
+    #[tracing::instrument(skip(self))]
+    pub async fn insert_report(&self, report: &Report) -> Result<Persisted<Report>, sqlx::Error> {
+        sqlx::query_as("INSERT INTO reports (score) VALUES (?) RETURNING *")
+            .bind(report.score)
+            .fetch_one(&self.pool)
+            .await
+    }
+
+    #[tracing::instrument(skip(self))]
     pub async fn find_latest_report(&self) -> Result<Persisted<Report>, sqlx::Error> {
+        sqlx::query_as("SELECT * FROM reports ORDER BY created_at DESC LIMIT 1")
+            .fetch_one(&self.pool)
+            .await
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub async fn find_group_by_id(
+        &self,
+        id: &Id<ReportGroup>,
+    ) -> Result<Persisted<ReportGroup>, sqlx::Error> {
         use sqlx::Row;
 
-        let report_result = sqlx::query(
-            "SELECT id, created_at, score FROM reports ORDER BY created_at DESC LIMIT 1",
-        )
-        .fetch_one(&self.pool)
-        .await?;
+        let group_result = sqlx::query("SELECT * FROM report_groups WHERE id = ?")
+            .bind(id)
+            .fetch_one(&self.pool)
+            .await?;
 
-        let report_id: u32 = report_result.try_get("id")?;
-        let report_created_at: chrono::DateTime<chrono::Utc> =
-            report_result.try_get("created_at")?;
-        let score = report_result.try_get("score")?;
+        let id: u32 = group_result.try_get("id")?;
+        let created_at: chrono::DateTime<chrono::Utc> = group_result.try_get("created_at")?;
+        let report_id = group_result.try_get::<u32, _>("report_id")?;
+        Ok(Persisted {
+            id: Id::from(id),
+            created_at,
+            value: ReportGroup {
+                report_id: Id::from(report_id),
+                embedding_ids: self.list_embedding_ids_by_group_id(&Id::from(id)).await?,
+            },
+        })
+    }
 
-        let mut report = Report {
-            score,
-            groups: vec![],
-        };
+    #[tracing::instrument(skip(self))]
+    pub async fn list_groups_by_report_id(
+        &self,
+        report_id: &Id<Report>,
+    ) -> Result<Vec<Persisted<ReportGroup>>, sqlx::Error> {
+        use sqlx::Row;
 
-        let report_groups_result = sqlx::query("SELECT id FROM report_groups WHERE report_id = ?")
+        let groups = sqlx::query("SELECT * FROM report_groups WHERE report_id = ?")
             .bind(report_id)
             .fetch_all(&self.pool)
             .await?;
 
-        for group_result in report_groups_result {
-            let group_id = group_result.try_get::<u32, _>("id")?;
-            let group_embeddings = self.list_group_embedding_ids(group_id).await?;
-            report.groups.push(group_embeddings);
+        let mut result = Vec::with_capacity(groups.len());
+        for group in groups {
+            let id: u32 = group.try_get("id")?;
+            let created_at: chrono::DateTime<chrono::Utc> = group.try_get("created_at")?;
+            let value = ReportGroup {
+                report_id: report_id.clone(),
+                embedding_ids: self.list_embedding_ids_by_group_id(&Id::from(id)).await?,
+            };
+            result.push(Persisted {
+                id: Id::from(id),
+                created_at,
+                value,
+            });
         }
 
-        Ok(Persisted {
-            id: Id::from(report_id),
-            created_at: report_created_at,
-            value: report,
-        })
+        Ok(result)
     }
 
-    async fn list_group_embedding_ids(
+    #[tracing::instrument(skip(self))]
+    pub async fn list_embedding_ids_by_group_id(
         &self,
-        group_id: u32,
+        group_id: &Id<ReportGroup>,
     ) -> Result<Vec<Id<Embedding>>, sqlx::Error> {
         use sqlx::Row;
 
-        let group_embeddings_results = sqlx::query(
+        let rows = sqlx::query(
             "SELECT embedding_id FROM report_group_embeddings WHERE report_group_id = ?",
         )
         .bind(group_id)
         .fetch_all(&self.pool)
         .await?;
 
-        group_embeddings_results
-            .into_iter()
-            .map(|result| result.try_get::<u32, _>("embedding_id").map(Id::from))
-            .collect::<Result<_, _>>()
+        let mut result = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: u32 = row.try_get("embedding_id")?;
+            result.push(Id::from(id));
+        }
+
+        Ok(result)
     }
 }
 
 pub struct Id<T>(u32, std::marker::PhantomData<T>);
+
+impl<'de, T> serde::Deserialize<'de> for Id<T> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = u32::deserialize(deserializer)?;
+        Ok(Id(value, std::marker::PhantomData))
+    }
+}
 
 impl<T> Clone for Id<T> {
     fn clone(&self) -> Self {
@@ -347,7 +397,7 @@ pub struct Embedding {
     pub size: u32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Persisted<T> {
     pub id: Id<T>,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -490,5 +540,27 @@ impl sqlx::FromRow<'_, sqlx::sqlite::SqliteRow> for Persisted<feeds::Translation
 #[derive(Debug, Clone)]
 pub struct Report {
     pub score: f32,
-    pub groups: Vec<Vec<Id<Embedding>>>,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for Persisted<Report> {
+    fn from_row(row: &'r sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
+        use sqlx::Row;
+
+        let id = row.try_get::<u32, _>("id")?;
+        let created_at = row.try_get("created_at")?;
+
+        let score = row.try_get("score")?;
+
+        Ok(Persisted {
+            id: id.into(),
+            created_at,
+            value: Report { score },
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ReportGroup {
+    pub report_id: Id<Report>,
+    pub embedding_ids: Vec<Id<Embedding>>,
 }
