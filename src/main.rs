@@ -25,42 +25,6 @@ enum FetchFeedsError {
     Crawler(#[from] feeds::CrawlError),
 }
 
-async fn fetch_feeds(db: &db::Client, crawler: &feeds::Crawler) -> Result<(), FetchFeedsError> {
-    let feeds = db.list_feeds().await?;
-
-    let entries =
-        futures::future::try_join_all(feeds.iter().map(|feed| crawler.crawl(feed))).await?;
-
-    for (entry, fields) in entries.into_iter().flatten() {
-        if let Some(entry) = db.insert_entry(&entry).await? {
-            let fields = fields.into_iter().map(|(name, lang_code, value)| {
-                let md5_hash = md5::compute(&value);
-                (
-                    feeds::Field {
-                        entry_id: entry.id,
-                        name,
-                        lang_code,
-                        md5_hash,
-                    },
-                    feeds::Translation {
-                        value: value.to_string(),
-                        md5_hash,
-                    },
-                )
-            });
-
-            for (sv_field, sv_translation) in fields {
-                futures::try_join!(
-                    db.insert_field(&sv_field),
-                    db.insert_translation(&sv_translation)
-                )?;
-            }
-        }
-    }
-
-    Ok(())
-}
-
 #[tokio::main]
 #[allow(clippy::too_many_lines)]
 async fn main() {
@@ -138,38 +102,18 @@ async fn main() {
             .expect("failed to insert embedding");
     }
 
-    let today_entries = db
-        .list_entries_for_date(chrono::Utc::now().date_naive())
+    let today_en_title_embeddings = db
+        .list_embeddings_by_field_name_lang_code_date(
+            feeds::FieldName::Title,
+            feeds::LanguageCode::EN,
+            chrono::Utc::now().date_naive(),
+        )
         .await
-        .expect("failed to query entries for time range");
-
-    let today_entries_en_title_fields = futures::future::try_join_all(
-        today_entries
-            .iter()
-            .map(|entry| db.find_title_by_entry_id(entry.id, feeds::LanguageCode::EN)),
-    )
-    .await
-    .expect("failed to query embeddings by entry id");
-
-    let today_en_title_embeddings = futures::future::try_join_all(
-        today_entries_en_title_fields
-            .iter()
-            .map(|field| db.find_embedding_by_md5_hash(&field.value.md5_hash)),
-    )
-    .await
-    .expect("failed to query embeddings by md5 hash");
+        .expect("failed to query embeddings by md5 hash");
 
     let (clusters, score) = group_embeddings_best(&today_en_title_embeddings, 2, 0.75..=1.0).await;
     let report = db::Report {
-        groups: clusters
-            .into_iter()
-            .map(|cluster| {
-                cluster
-                    .into_iter()
-                    .map(|i| today_entries[i].id)
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>(),
+        groups: clusters,
         score,
     };
 
@@ -185,30 +129,73 @@ async fn main() {
     let mut lines = vec![];
     for group in latest_report.value.groups {
         lines.push(String::new());
-        for entry_id in group {
-            let entry = db
-                .find_entry_by_id(entry_id)
+        for embedding_id in group {
+            let embedding = db
+                .find_embedding_by_id(embedding_id)
                 .await
                 .expect("failed to find entry by id");
 
-            let entry_title = db
-                .find_title_by_entry_id(entry_id, feeds::LanguageCode::EN)
-                .await
-                .expect("failed to find title by entry id");
-
-            let en_entry_title = db
-                .find_translation_by_md5_hash(&entry_title.value.md5_hash)
+            let translation = db
+                .find_translation_by_md5_hash(&embedding.value.md5_hash)
                 .await
                 .expect("failed to find translation by md5 hash");
 
-            lines.push(format!(
-                "- {} ({})",
-                en_entry_title.value.value, entry.value.href
-            ));
+            let fields = db
+                .list_fields_md5_hash(&embedding.value.md5_hash)
+                .await
+                .expect("failed to find title by entry id");
+
+            for field in fields {
+                let entry = db
+                    .find_entry_by_id(field.value.entry_id)
+                    .await
+                    .expect("failed to find entry by id");
+
+                lines.push(format!(
+                    "- {} ({})",
+                    translation.value.value, entry.value.href
+                ));
+            }
         }
     }
 
     std::fs::write("./report.txt", lines.join("\n")).expect("failed to save report");
+}
+
+async fn fetch_feeds(db: &db::Client, crawler: &feeds::Crawler) -> Result<(), FetchFeedsError> {
+    let feeds = db.list_feeds().await?;
+
+    let entries =
+        futures::future::try_join_all(feeds.iter().map(|feed| crawler.crawl(feed))).await?;
+
+    for (entry, fields) in entries.into_iter().flatten() {
+        if let Some(entry) = db.insert_entry(&entry).await? {
+            let fields = fields.into_iter().map(|(name, lang_code, value)| {
+                let md5_hash = md5::compute(&value);
+                (
+                    feeds::Field {
+                        entry_id: entry.id,
+                        name,
+                        lang_code,
+                        md5_hash,
+                    },
+                    feeds::Translation {
+                        value: value.to_string(),
+                        md5_hash,
+                    },
+                )
+            });
+
+            for (sv_field, sv_translation) in fields {
+                futures::try_join!(
+                    db.insert_field(&sv_field),
+                    db.insert_translation(&sv_translation)
+                )?;
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[tracing::instrument(skip_all)]
@@ -225,13 +212,20 @@ async fn group_embeddings_best(
     embeddings: &[db::Persisted<db::Embedding>],
     min_points: usize,
     range: std::ops::RangeInclusive<f32>,
-) -> (Vec<Vec<usize>>, f32) {
+) -> (Vec<Vec<db::Id<db::Embedding>>>, f32) {
+    let shape = (embeddings.len(), embeddings[0].value.size as usize);
+    let vectors = embeddings
+        .iter()
+        .flat_map(|embedding| embedding.value.value.iter().copied())
+        .collect::<Vec<_>>();
+    let vectors: Array2<f32> = Array2::from_shape_vec(shape, vectors).expect("invalid shape");
+
     let mut range = range;
     let mut best_result = (Vec::new(), -1.0);
 
     let (mut left_result, mut right_result) = futures::join!(
-        group_embeddings(embeddings, min_points, *range.start()),
-        group_embeddings(embeddings, min_points, *range.end()),
+        group_embeddings(&vectors, min_points, *range.start()),
+        group_embeddings(&vectors, min_points, *range.end()),
     );
 
     loop {
@@ -250,7 +244,7 @@ async fn group_embeddings_best(
         }
 
         let center = (*range.start() + *range.end()) / 2.0;
-        let center_result = group_embeddings(embeddings, min_points, center).await;
+        let center_result = group_embeddings(&vectors, min_points, center).await;
 
         if left_result.1 > right_result.1 {
             range = *range.start()..=center;
@@ -264,31 +258,32 @@ async fn group_embeddings_best(
         };
     }
 
-    best_result
+    let (clusters, score) = best_result;
+    let clusters = clusters
+        .into_iter()
+        .map(|cluster| {
+            cluster
+                .into_iter()
+                .map(|i| embeddings[i].id)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    (clusters, score)
 }
 
-#[tracing::instrument(skip(embeddings), fields(embeddings_len = embeddings.len()))]
+#[tracing::instrument(skip(vectors), fields(dim = ?vectors.dim()))]
 async fn group_embeddings(
-    embeddings: &[db::Persisted<db::Embedding>],
+    vectors: &Array2<f32>,
     min_points: usize,
     tolerance: f32,
 ) -> (Vec<Vec<usize>>, f32) {
     let (send, recv) = tokio::sync::oneshot::channel();
 
-    let embeddings_len = embeddings.len();
-    let vectors = embeddings
-        .iter()
-        .flat_map(|embedding| embedding.value.value.iter().copied())
-        .collect::<Vec<_>>();
-
-    let size: usize = embeddings[0].value.size.try_into().expect("invalid size");
+    let dim = vectors.dim();
+    let dataset = DatasetBase::from(vectors.clone());
 
     rayon::spawn(move || {
-        let vectors: Array2<f32> =
-            Array2::from_shape_vec((embeddings_len, size), vectors).expect("invalid shape");
-
-        let dataset: DatasetBase<_, _> = vectors.into();
-
         let cluster_memberships = Dbscan::params(min_points)
             .tolerance(tolerance)
             .transform(dataset.clone())
@@ -296,7 +291,7 @@ async fn group_embeddings(
 
         let silhouette_score = cluster_memberships.silhouette_score().unwrap();
 
-        let indices = (0..embeddings_len).collect::<Vec<_>>();
+        let indices = (0..dim.0).collect::<Vec<_>>();
         let clustered_indices = cluster_memberships
             .targets()
             .into_iter()

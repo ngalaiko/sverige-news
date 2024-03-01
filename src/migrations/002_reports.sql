@@ -13,5 +13,5 @@ CREATE TABLE IF NOT EXISTS report_groups (
 CREATE TABLE IF NOT EXISTS report_group_embeddings (
     report_group_id integer NOT NULL,
     embedding_id integer NOT NULL,
-    PRIMARY KEY(report_group_id, embedding_id)
+    PRIMARY KEY (report_group_id, embedding_id)
 );

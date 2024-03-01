@@ -43,20 +43,6 @@ impl Client {
             .fetch_one(&self.pool)
             .await
     }
-
-    #[tracing::instrument(skip(self))]
-    pub async fn list_entries_for_date(
-        &self,
-        date: chrono::NaiveDate,
-    ) -> Result<Vec<Persisted<feeds::Entry>>, sqlx::Error> {
-        let date = date
-            .and_hms_opt(0, 0, 0)
-            .expect("failed to create start of day");
-        sqlx::query_as("SELECT * FROM entries WHERE published_at >= DATETIME($1, 'start of day') and published_at < DATETIME($1, 'start of day', '+1 day')")
-            .bind(date)
-            .fetch_all(&self.pool)
-            .await
-    }
 }
 
 impl Client {
@@ -84,18 +70,14 @@ impl Client {
     }
 
     #[tracing::instrument(skip(self))]
-    pub async fn find_title_by_entry_id(
+    pub async fn list_fields_md5_hash(
         &self,
-        entry_id: Id<feeds::Entry>,
-        language_code: feeds::LanguageCode,
-    ) -> Result<Persisted<feeds::Field>, sqlx::Error> {
-        sqlx::query_as(
-            "SELECT * FROM fields WHERE entry_id = ? AND name = 'title' AND lang_code = ?",
-        )
-        .bind(u32::from(entry_id))
-        .bind(language_code.to_string())
-        .fetch_one(&self.pool)
-        .await
+        md5_hash: &md5::Digest,
+    ) -> Result<Vec<Persisted<feeds::Field>>, sqlx::Error> {
+        sqlx::query_as("SELECT * FROM fields WHERE md5_hash = ?")
+            .bind(md5_hash.to_vec())
+            .fetch_all(&self.pool)
+            .await
     }
 }
 
@@ -116,12 +98,45 @@ impl Client {
     }
 
     #[tracing::instrument(skip(self))]
-    pub async fn find_embedding_by_md5_hash(
+    pub async fn list_embeddings_by_field_name_lang_code_date(
         &self,
-        md5_hash: &md5::Digest,
+        field_name: feeds::FieldName,
+        lang_code: feeds::LanguageCode,
+        date: chrono::NaiveDate,
+    ) -> Result<Vec<Persisted<Embedding>>, sqlx::Error> {
+        let date = date
+            .and_hms_opt(0, 0, 0)
+            .expect("failed to create start of day");
+
+        sqlx::query_as(
+            "SELECT embeddings.*
+                        FROM embeddings
+                        JOIN fields ON
+                            fields.md5_hash = embeddings.md5_hash
+                            AND fields.lang_code = $1
+                            AND fields.name = $2
+                        JOIN entries ON
+                            entries.id = fields.entry_id
+                        WHERE
+                            entries.published_at >= DATETIME($3, 'start of day')
+                            AND entries.published_at < DATETIME($3, 'start of day', '+1 day')
+                        GROUP BY embeddings.md5_hash
+                        ",
+        )
+        .bind(lang_code.to_string())
+        .bind(field_name.to_string())
+        .bind(date)
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub async fn find_embedding_by_id(
+        &self,
+        id: Id<Embedding>,
     ) -> Result<Persisted<Embedding>, sqlx::Error> {
-        sqlx::query_as("SELECT * FROM embeddings WHERE md5_hash = ?")
-            .bind(md5_hash.to_vec())
+        sqlx::query_as("SELECT * FROM embeddings WHERE id = ?")
+            .bind(id)
             .fetch_one(&self.pool)
             .await
     }
@@ -464,5 +479,5 @@ impl sqlx::FromRow<'_, sqlx::sqlite::SqliteRow> for Persisted<feeds::Translation
 #[derive(Debug, Clone)]
 pub struct Report {
     pub score: f32,
-    pub groups: Vec<Vec<Id<feeds::Entry>>>,
+    pub groups: Vec<Vec<Id<Embedding>>>,
 }
