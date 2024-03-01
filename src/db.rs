@@ -22,37 +22,15 @@ impl Client {
     pub async fn insert_entry(
         &self,
         entry: &feeds::Entry,
-    ) -> Result<Persisted<feeds::Entry>, sqlx::Error> {
-        match sqlx::query_as(
-            "INSERT INTO entries (href, feed_id, published_at) VALUES ( ?, ?, ?) RETURNING *",
+    ) -> Result<Option<Persisted<feeds::Entry>>, sqlx::Error> {
+        sqlx::query_as(
+            "INSERT OR IGNORE INTO entries (href, feed_id, published_at) VALUES ( ?, ?, ?) RETURNING *",
         )
         .bind(entry.href.to_string())
         .bind(u32::from(entry.feed_id))
         .bind(entry.published_at)
-        .fetch_one(&self.pool)
+        .fetch_optional(&self.pool)
         .await
-        {
-            Ok(entry) => Ok(entry),
-            Err(error)
-                if error
-                    .as_database_error()
-                    .map(sqlx::error::DatabaseError::kind)
-                    == Some(sqlx::error::ErrorKind::UniqueViolation) =>
-            {
-                self.find_entry(entry).await
-            }
-            Err(error) => Err(error),
-        }
-    }
-
-    async fn find_entry(
-        &self,
-        entry: &feeds::Entry,
-    ) -> Result<Persisted<feeds::Entry>, sqlx::Error> {
-        sqlx::query_as("SELECT * FROM entries WHERE href = ?")
-            .bind(entry.href.to_string())
-            .fetch_one(&self.pool)
-            .await
     }
 
     #[tracing::instrument(skip(self))]
@@ -86,39 +64,13 @@ impl Client {
     pub async fn insert_field(
         &self,
         field: &feeds::Field,
-    ) -> Result<Persisted<feeds::Field>, sqlx::Error> {
-        match sqlx::query_as("INSERT INTO fields (entry_id, name, lang_code, md5_hash) VALUES (?, ?, ?, ?) RETURNING *")
+    ) -> Result<Option<Persisted<feeds::Field>>, sqlx::Error> {
+        sqlx::query_as("INSERT OR IGNORE INTO fields (entry_id, name, lang_code, md5_hash) VALUES (?, ?, ?, ?) RETURNING *")
             .bind(u32::from(field.entry_id))
             .bind(field.name.to_string())
             .bind(field.lang_code.to_string())
             .bind(field.md5_hash.to_vec())
-            .fetch_one(&self.pool)
-            .await
-        {
-                    Ok(entry) => Ok(entry),
-                    Err(error)
-                        if error
-                            .as_database_error()
-                            .map(sqlx::error::DatabaseError::kind)
-                            == Some(sqlx::error::ErrorKind::UniqueViolation) =>
-                    {
-                        self.find_field(
-                            field
-                        ).await
-                    }
-                    Err(error) => Err(error),
-                }
-    }
-
-    async fn find_field(
-        &self,
-        field: &feeds::Field,
-    ) -> Result<Persisted<feeds::Field>, sqlx::Error> {
-        sqlx::query_as("SELECT * FROM fields WHERE entry_id = ? AND name = ? AND lang_code = ?")
-            .bind(field.entry_id)
-            .bind(field.name.to_string())
-            .bind(field.lang_code.to_string())
-            .fetch_one(&self.pool)
+            .fetch_optional(&self.pool)
             .await
     }
 
@@ -152,37 +104,15 @@ impl Client {
     pub async fn insert_embeddig(
         &self,
         embedding: &Embedding,
-    ) -> Result<Persisted<Embedding>, sqlx::Error> {
-        match sqlx::query_as(
-            "INSERT INTO embeddings (md5_hash, value, size) VALUES ( ?, ?, ? ) RETURNING *",
+    ) -> Result<Option<Persisted<Embedding>>, sqlx::Error> {
+        sqlx::query_as(
+            "INSERT OR IGNORE INTO embeddings (md5_hash, value, size) VALUES ( ?, ?, ? ) RETURNING *",
         )
         .bind(embedding.md5_hash.to_vec())
         .bind(serde_json::to_string(&embedding.value).expect("failed to serialize embedding"))
         .bind(embedding.size)
-        .fetch_one(&self.pool)
+        .fetch_optional(&self.pool)
         .await
-        {
-            Ok(embedding) => Ok(embedding),
-            Err(error)
-                if error
-                    .as_database_error()
-                    .map(sqlx::error::DatabaseError::kind)
-                    == Some(sqlx::error::ErrorKind::UniqueViolation) =>
-            {
-                self.find_embedding(embedding).await
-            }
-            Err(error) => Err(error),
-        }
-    }
-
-    async fn find_embedding(
-        &self,
-        embedding: &Embedding,
-    ) -> Result<Persisted<Embedding>, sqlx::Error> {
-        sqlx::query_as("SELECT * FROM embeddings WHERE md5_hash = ?")
-            .bind(embedding.md5_hash.to_vec())
-            .fetch_one(&self.pool)
-            .await
     }
 
     #[tracing::instrument(skip(self))]
@@ -202,34 +132,14 @@ impl Client {
     pub async fn insert_translation(
         &self,
         transaslation: &feeds::Translation,
-    ) -> Result<Persisted<feeds::Translation>, sqlx::Error> {
-        match sqlx::query_as("INSERT INTO translations (md5_hash, value) VALUES (?, ?) RETURNING *")
-            .bind(transaslation.md5_hash.to_vec())
-            .bind(transaslation.value.to_string())
-            .fetch_one(&self.pool)
-            .await
-        {
-            Ok(translation) => Ok(translation),
-            Err(error)
-                if error
-                    .as_database_error()
-                    .map(sqlx::error::DatabaseError::kind)
-                    == Some(sqlx::error::ErrorKind::UniqueViolation) =>
-            {
-                self.find_translation(transaslation).await
-            }
-            Err(error) => Err(error),
-        }
-    }
-
-    async fn find_translation(
-        &self,
-        translation: &feeds::Translation,
-    ) -> Result<Persisted<feeds::Translation>, sqlx::Error> {
-        sqlx::query_as("SELECT * FROM translations WHERE md5_hash = ?")
-            .bind(translation.md5_hash.to_vec())
-            .fetch_one(&self.pool)
-            .await
+    ) -> Result<Option<Persisted<feeds::Translation>>, sqlx::Error> {
+        sqlx::query_as(
+            "INSERT OR IGNORE INTO translations (md5_hash, value) VALUES (?, ?) RETURNING *",
+        )
+        .bind(transaslation.md5_hash.to_vec())
+        .bind(transaslation.value.to_string())
+        .fetch_optional(&self.pool)
+        .await
     }
 
     #[tracing::instrument(skip(self), fields(md5_hash = ?md5_hash))]
@@ -273,6 +183,7 @@ impl Client {
                 .bind(report.score)
                 .fetch_one(&self.pool)
                 .await?;
+
         let report_id: u32 = report_insert_result.try_get("id")?;
         let report_created_at: chrono::DateTime<chrono::Utc> =
             report_insert_result.try_get("created_at")?;

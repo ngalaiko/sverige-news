@@ -17,6 +17,50 @@ struct Cli {
     database_file: std::path::PathBuf,
 }
 
+#[derive(Debug, thiserror::Error)]
+enum FetchFeedsError {
+    #[error(transparent)]
+    Sqlx(#[from] sqlx::Error),
+    #[error(transparent)]
+    Crawler(#[from] feeds::CrawlError),
+}
+
+async fn fetch_feeds(db: &db::Client, crawler: &feeds::Crawler) -> Result<(), FetchFeedsError> {
+    let feeds = db.list_feeds().await?;
+
+    let entries =
+        futures::future::try_join_all(feeds.iter().map(|feed| crawler.crawl(feed))).await?;
+
+    for (entry, fields) in entries.into_iter().flatten() {
+        if let Some(entry) = db.insert_entry(&entry).await? {
+            let fields = fields.into_iter().map(|(name, lang_code, value)| {
+                let md5_hash = md5::compute(&value);
+                (
+                    feeds::Field {
+                        entry_id: entry.id,
+                        name,
+                        lang_code,
+                        md5_hash,
+                    },
+                    feeds::Translation {
+                        value: value.to_string(),
+                        md5_hash,
+                    },
+                )
+            });
+
+            for (sv_field, sv_translation) in fields {
+                futures::try_join!(
+                    db.insert_field(&sv_field),
+                    db.insert_translation(&sv_translation)
+                )?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 #[allow(clippy::too_many_lines)]
 async fn main() {
@@ -36,41 +80,9 @@ async fn main() {
     let openai_client = openai::Client::new(&cli.openai_base_url, &cli.openai_token);
     let crawler = feeds::Crawler::default();
 
-    let feeds = db.list_feeds().await.expect("failed to list feeds");
-
-    let entries = futures::future::try_join_all(feeds.iter().map(|feed| crawler.crawl(feed)))
+    fetch_feeds(&db, &crawler)
         .await
-        .unwrap();
-
-    for (entry, fields) in entries.into_iter().flatten() {
-        let entry = db
-            .insert_entry(&entry)
-            .await
-            .expect("failed to insert entry");
-        let fields = fields.into_iter().map(|(name, lang_code, value)| {
-            let md5_hash = md5::compute(&value);
-            (
-                feeds::Field {
-                    entry_id: entry.id,
-                    name,
-                    lang_code,
-                    md5_hash,
-                },
-                feeds::Translation {
-                    value: value.to_string(),
-                    md5_hash,
-                },
-            )
-        });
-        for (sv_field, sv_translation) in fields {
-            db.insert_field(&sv_field)
-                .await
-                .expect("failed to insert field");
-            db.insert_translation(&sv_translation)
-                .await
-                .expect("failed to insert translation");
-        }
-    }
+        .expect("failed to fetch feeds");
 
     let untranslated_sv_fields = db
         .list_sv_fields_without_en_translation()
@@ -147,23 +159,23 @@ async fn main() {
     .await
     .expect("failed to query embeddings by md5 hash");
 
-      let (clusters, score) = group_embeddings_best(&today_en_title_embeddings, 2, 0.75..=1.0).await;
-      let report = db::Report {
-          groups: clusters
-              .into_iter()
-              .map(|cluster| {
-                  cluster
-                      .into_iter()
-                      .map(|i| today_entries[i].id)
-                      .collect::<Vec<_>>()
-              })
-              .collect::<Vec<_>>(),
-          score,
-      };
+    let (clusters, score) = group_embeddings_best(&today_en_title_embeddings, 2, 0.75..=1.0).await;
+    let report = db::Report {
+        groups: clusters
+            .into_iter()
+            .map(|cluster| {
+                cluster
+                    .into_iter()
+                    .map(|i| today_entries[i].id)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>(),
+        score,
+    };
 
-      db.insert_report(&report)
-          .await
-          .expect("failed to insert report");
+    db.insert_report(&report)
+        .await
+        .expect("failed to insert report");
 
     let latest_report = db
         .find_latest_report()
