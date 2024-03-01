@@ -1,11 +1,9 @@
+mod clustering;
 mod db;
 mod feeds;
 mod openai;
 
 use clap::Parser;
-use linfa::{metrics::SilhouetteScore, traits::Transformer, DatasetBase};
-use linfa_clustering::Dbscan;
-use ndarray::Array2;
 
 #[derive(Parser)]
 struct Cli {
@@ -113,7 +111,8 @@ async fn main() {
         .await
         .expect("failed to query embeddings by md5 hash");
 
-    let (clusters, score) = group_embeddings_best(&today_en_title_embeddings, 2, 0.75..=1.0).await;
+    let (clusters, score) =
+        clustering::group_embeddings(&today_en_title_embeddings, 2, 0.75..=1.0).await;
     let report = db::Report {
         groups: clusters,
         score,
@@ -198,111 +197,4 @@ async fn fetch_feeds(db: &db::Client, crawler: &feeds::Crawler) -> Result<(), Fe
     }
 
     Ok(())
-}
-
-// find the best tolerance using binary search
-async fn group_embeddings_best(
-    embeddings: &[db::Persisted<db::Embedding>],
-    min_points: usize,
-    range: std::ops::RangeInclusive<f32>,
-) -> (Vec<Vec<db::Id<db::Embedding>>>, f32) {
-    let shape = (embeddings.len(), embeddings[0].value.size as usize);
-    let vectors = embeddings
-        .iter()
-        .flat_map(|embedding| embedding.value.value.iter().copied())
-        .collect::<Vec<_>>();
-    let vectors: Array2<f32> = Array2::from_shape_vec(shape, vectors).expect("invalid shape");
-
-    let mut range = range;
-    let mut best_result = (Vec::new(), -1.0);
-
-    let (mut left_result, mut right_result) = futures::join!(
-        group_embeddings(&vectors, min_points, *range.start()),
-        group_embeddings(&vectors, min_points, *range.end()),
-    );
-
-    loop {
-        println!("range {range:?}");
-
-        println!("tolerance: {}, score: {:}", *range.start(), left_result.1);
-        println!("tolerance: {}, score: {:}", *range.end(), right_result.1);
-
-        if left_result.1 > best_result.1 {
-            best_result = left_result.clone();
-        } else if right_result.1 > best_result.1 {
-            best_result = right_result.clone();
-        } else {
-            // result is not improving, stop
-            break;
-        }
-
-        let center = (*range.start() + *range.end()) / 2.0;
-        let center_result = group_embeddings(&vectors, min_points, center).await;
-
-        if left_result.1 > right_result.1 {
-            range = *range.start()..=center;
-            right_result = center_result;
-        } else if right_result.1 > left_result.1 {
-            range = center..=*range.end();
-            left_result = center_result;
-        } else {
-            // ranges are equal, break
-            break;
-        };
-    }
-
-    let (clusters, score) = best_result;
-    let clusters = clusters
-        .into_iter()
-        .map(|cluster| {
-            cluster
-                .into_iter()
-                .map(|i| embeddings[i].id)
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-
-    (clusters, score)
-}
-
-#[tracing::instrument(skip(vectors), fields(dim = ?vectors.dim()))]
-async fn group_embeddings(
-    vectors: &Array2<f32>,
-    min_points: usize,
-    tolerance: f32,
-) -> (Vec<Vec<usize>>, f32) {
-    let (send, recv) = tokio::sync::oneshot::channel();
-
-    let dim = vectors.dim();
-    let dataset = DatasetBase::from(vectors.clone());
-
-    rayon::spawn(move || {
-        let cluster_memberships = Dbscan::params(min_points)
-            .tolerance(tolerance)
-            .transform(dataset.clone())
-            .expect("failed to cluster");
-
-        let silhouette_score = cluster_memberships.silhouette_score().unwrap();
-
-        let indices = (0..dim.0).collect::<Vec<_>>();
-        let clustered_indices = cluster_memberships
-            .targets()
-            .into_iter()
-            .zip(indices.into_iter())
-            .filter_map(|(target, index)| target.map(|target| (target, index)))
-            .fold(
-                std::collections::HashMap::new(),
-                |mut acc: std::collections::HashMap<usize, Vec<usize>>, (target, index)| {
-                    acc.entry(target).or_default().push(index);
-                    acc
-                },
-            )
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
-
-        let _ = send.send((clustered_indices, silhouette_score));
-    });
-
-    recv.await.expect("panic in rayon::spawn")
 }
