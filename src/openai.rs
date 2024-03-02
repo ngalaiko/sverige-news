@@ -148,7 +148,7 @@ impl<'a> Translator<'a> {
         Self { client }
     }
 
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip(self))]
     pub async fn translate_sv_to_en(&self, value: &str) -> Result<String, Error> {
         let task = "You are a highly skilled and concise professional translator. When you receive a sentence in Swedish, your task is to translate it into English. VERY IMPORTANT: Do not output any notes, explanations, alternatives or comments after or before the translation.";
         self.client.comptetions(task, value).await
