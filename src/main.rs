@@ -132,7 +132,9 @@ async fn translate(
     db: &db::Client,
     translator: &openai::Translator<'_>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let untranslated_sv_fields = db.list_sv_fields_without_en_translation().await?;
+    let untranslated_sv_fields = db
+        .list_sv_fields_without_en_translation_by_date(&chrono::Utc::now().date_naive())
+        .await?;
 
     for sv_field in untranslated_sv_fields {
         let sv_translation = db
@@ -143,18 +145,19 @@ async fn translate(
             .translate_sv_to_en(&sv_translation.value.value)
             .await?;
 
-        let en_translation = feeds::Translation {
-            md5_hash: md5::compute(&translation),
-            value: translation,
-        };
-        db.insert_translation(&en_translation).await?;
-
-        let en_field = feeds::Field {
-            lang_code: feeds::LanguageCode::EN,
-            md5_hash: en_translation.md5_hash,
-            ..sv_field.value
-        };
-        db.insert_field(&en_field).await?;
+        let md5_hash = md5::compute(&translation);
+        futures::future::try_join(
+            db.insert_translation(&feeds::Translation {
+                md5_hash,
+                value: translation,
+            }),
+            db.insert_field(&feeds::Field {
+                md5_hash,
+                lang_code: feeds::LanguageCode::EN,
+                ..sv_field.value
+            }),
+        )
+        .await?;
     }
 
     Ok(())
@@ -165,8 +168,12 @@ async fn generate_embedding(
     openai_client: &openai::Client<'_>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let translations_without_embeddings = db
-        .list_translations_without_embeddings(feeds::LanguageCode::EN)
+        .list_translations_without_embeddings_by_lang_code_date(
+            feeds::LanguageCode::EN,
+            &chrono::Utc::now().date_naive(),
+        )
         .await?;
+
     for translation in translations_without_embeddings {
         let embedding = openai_client.embeddings(&translation.value.value).await?;
 

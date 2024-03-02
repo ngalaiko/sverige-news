@@ -62,12 +62,33 @@ impl Client {
     }
 
     #[tracing::instrument(skip(self))]
-    pub async fn list_sv_fields_without_en_translation(
+    pub async fn list_sv_fields_without_en_translation_by_date(
         &self,
+        date: &chrono::NaiveDate,
     ) -> Result<Vec<Persisted<feeds::Field>>, sqlx::Error> {
-        sqlx::query_as("SELECT * FROM fields  WHERE lang_code = 'sv' AND NOT EXISTS (SELECT 1 FROM fields AS en WHERE en.entry_id = fields.entry_id AND en.name = fields.name AND en.lang_code = 'en')")
-            .fetch_all(&self.pool)
-            .await
+        let date = date
+            .and_hms_opt(0, 0, 0)
+            .expect("failed to convert date to datetime");
+        sqlx::query_as(
+            "SELECT fields.*
+            FROM fields
+                JOIN entries ON entries.id = fields.entry_id
+                    AND entries.published_at >= DATETIME($1, 'start of day')
+                    AND entries.published_at < DATETIME($1, 'start of day', '+1 day')
+            WHERE
+                lang_code = 'sv'
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM fields AS en
+                    WHERE
+                        en.entry_id = fields.entry_id
+                        AND en.name = fields.name
+                        AND en.lang_code = 'en'
+                )",
+        )
+        .bind(date)
+        .fetch_all(&self.pool)
+        .await
     }
 
     #[tracing::instrument(skip(self))]
@@ -111,18 +132,18 @@ impl Client {
 
         sqlx::query_as(
             "SELECT embeddings.*
-                        FROM embeddings
-                        JOIN fields ON
-                            fields.md5_hash = embeddings.md5_hash
-                            AND fields.lang_code = $1
-                            AND fields.name = $2
-                        JOIN entries ON
-                            entries.id = fields.entry_id
-                        WHERE
-                            entries.published_at >= DATETIME($3, 'start of day')
-                            AND entries.published_at < DATETIME($3, 'start of day', '+1 day')
-                        GROUP BY embeddings.md5_hash
-                        ",
+            FROM embeddings
+            JOIN fields ON
+                fields.md5_hash = embeddings.md5_hash
+                AND fields.lang_code = $1
+                AND fields.name = $2
+            JOIN entries ON
+                entries.id = fields.entry_id
+            WHERE
+                entries.published_at >= DATETIME($3, 'start of day')
+                AND entries.published_at < DATETIME($3, 'start of day', '+1 day')
+            GROUP BY embeddings.md5_hash
+            ",
         )
         .bind(lang_code.to_string())
         .bind(field_name.to_string())
@@ -170,11 +191,27 @@ impl Client {
     }
 
     #[tracing::instrument(skip(self))]
-    pub async fn list_translations_without_embeddings(
+    pub async fn list_translations_without_embeddings_by_lang_code_date(
         &self,
         language_code: feeds::LanguageCode,
+        date: &chrono::NaiveDate,
     ) -> Result<Vec<Persisted<feeds::Translation>>, sqlx::Error> {
-        sqlx::query_as("SELECT translations.* FROM translations JOIN fields on fields.md5_hash = translations.md5_hash AND fields.lang_code = ? WHERE NOT EXISTS (SELECT 1 FROM embeddings WHERE embeddings.md5_hash = translations.md5_hash)")
+        let date = date
+            .and_hms_opt(0, 0, 0)
+            .expect("failed to create start of day");
+        sqlx::query_as("SELECT translations.*
+                        FROM translations
+                        JOIN fields
+                            ON fields.md5_hash = translations.md5_hash
+                            AND fields.lang_code = $2
+                        JOIN entries
+                            ON entries.id = fields.entry_id
+                        WHERE
+                            entries.published_at >= DATETIME($1, 'start of day')
+                                AND entries.published_at < DATETIME($1, 'start of day', '+1 day')
+                                AND NOT EXISTS (SELECT 1 FROM embeddings WHERE embeddings.md5_hash = translations.md5_hash)
+                        GROUP BY translations.md5_hash")
+            .bind(date)
             .bind(language_code.to_string())
             .fetch_all(&self.pool)
             .await
