@@ -88,8 +88,8 @@ async fn render_group(
             .await?;
 
         for field in fields {
-            let entry = state.db.find_entry_by_id(field.value.entry_id).await?;
-            let feed = state.db.find_feed_by_id(entry.value.feed_id).await?;
+            let entry = state.db.find_entry_by_id(&field.value.entry_id).await?;
+            let feed = state.db.find_feed_by_id(&entry.value.feed_id).await?;
             entries.push((feed, entry, translation.clone()));
         }
     }
@@ -134,8 +134,8 @@ async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> 
                 .await?;
 
             for field in fields {
-                let entry = state.db.find_entry_by_id(field.value.entry_id).await?;
-                let feed = state.db.find_feed_by_id(entry.value.feed_id).await?;
+                let entry = state.db.find_entry_by_id(&field.value.entry_id).await?;
+                let feed = state.db.find_feed_by_id(&entry.value.feed_id).await?;
                 entries.push((feed, entry, translation.clone()));
             }
         }

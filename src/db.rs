@@ -37,7 +37,7 @@ impl Client {
     #[tracing::instrument(skip(self))]
     pub async fn find_entry_by_id(
         &self,
-        id: Id<feeds::Entry>,
+        id: &Id<feeds::Entry>,
     ) -> Result<Persisted<feeds::Entry>, sqlx::Error> {
         sqlx::query_as("SELECT * FROM entries WHERE id = ?")
             .bind(id)
@@ -192,7 +192,7 @@ impl Client {
     #[tracing::instrument(skip(self))]
     pub async fn find_feed_by_id(
         &self,
-        id: Id<feeds::Feed>,
+        id: &Id<feeds::Feed>,
     ) -> Result<Persisted<feeds::Feed>, sqlx::Error> {
         sqlx::query_as("SELECT * FROM feeds WHERE id = ?")
             .bind(id)

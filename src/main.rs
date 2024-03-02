@@ -170,15 +170,15 @@ async fn generate_embedding(
     for translation in translations_without_embeddings {
         let embedding = openai_client.embeddings(&translation.value.value).await?;
 
-        let embedding = db::Embedding {
+        db.insert_embeddig(&db::Embedding {
             md5_hash: translation.value.md5_hash,
             size: embedding
                 .len()
                 .try_into()
                 .expect("failed to convert usize into u32"),
             value: embedding,
-        };
-        db.insert_embeddig(&embedding).await?;
+        })
+        .await?;
     }
     Ok(())
 }
