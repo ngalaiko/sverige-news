@@ -102,10 +102,10 @@ async fn render_group(
                 li {
                     h3 {
                         a href=(entry.value.href) { (translation.value.value) }
-                        p {
-                            time datetime=(entry.value.published_at.to_rfc3339()) { (entry.value.published_at.format("%H:%M")) }
-                            " by " (feed.value.title)
-                        }
+                    }
+                    p {
+                        time datetime=(entry.value.published_at.to_rfc3339()) { (entry.value.published_at.format("%H:%M")) }
+                        " by " (feed.value.title)
                     }
                 }
             }
@@ -159,16 +159,17 @@ async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> 
                 li {
                     h3 {
                         a href=(entry.value.href) { (translation.value.value) }
-                        p {
-                            "By "
-                            (feed.value.title)
-                            " and "
-                            a href=(format!("/groups/{}", group_id)) {
-                                @if count == 2 {
-                                    "1 other"
-                                } @else {
-                                    (count - 1) " others"
-                                }
+                    }
+                    p {
+                        date time=(entry.value.published_at.to_rfc3339()) { (entry.value.published_at.format("%H:%M")) }
+                        " by "
+                        (feed.value.title)
+                        " and "
+                        a href=(format!("/groups/{}", group_id)) {
+                            @if count == 2 {
+                                "1 other"
+                            } @else {
+                                (count - 1) " others"
                             }
                         }
                     }
