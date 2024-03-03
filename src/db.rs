@@ -331,7 +331,7 @@ impl Client {
             let id: u32 = group.try_get("id")?;
             let created_at: chrono::DateTime<chrono::Utc> = group.try_get("created_at")?;
             let value = ReportGroup {
-                report_id: report_id.clone(),
+                report_id: *report_id,
                 embedding_ids: self.list_embedding_ids_by_group_id(&Id::from(id)).await?,
             };
             result.push(Persisted {

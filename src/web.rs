@@ -2,6 +2,7 @@ use axum::extract::{Path, State};
 use axum::response::Html;
 use axum::routing::get;
 use axum::Router;
+use tower_http::services::ServeDir;
 
 use crate::db;
 
@@ -16,6 +17,7 @@ pub async fn serve(db: db::Client, address: &str) -> Result<(), Box<dyn std::err
     let router = Router::new()
         .route("/", get(render_index))
         .route("/groups/:id", get(render_group))
+        .fallback_service(ServeDir::new("assets"))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(address).await?;
     tracing::info!("listening on {}", listener.local_addr().unwrap());
@@ -23,17 +25,34 @@ pub async fn serve(db: db::Client, address: &str) -> Result<(), Box<dyn std::err
     Ok(())
 }
 
-struct Page(maud::Markup);
+struct Page {
+    title: String,
+    body: maud::Markup,
+}
 
-impl axum::response::IntoResponse for Page {
-    fn into_response(self) -> axum::response::Response {
-        Html(self.0.into_string()).into_response()
+impl Page {
+    pub fn new(title: &str, body: maud::Markup) -> Self {
+        Self {
+            title: title.to_string(),
+            body,
+        }
     }
 }
 
-impl From<maud::Markup> for Page {
-    fn from(markup: maud::Markup) -> Self {
-        Self(markup)
+impl axum::response::IntoResponse for Page {
+    fn into_response(self) -> axum::response::Response {
+        let page = maud::html! {
+            (maud::DOCTYPE)
+            head {
+                meta charset="utf-8";
+                title { (self.title) }
+                link rel="stylesheet" href="/index.css";
+            }
+            body {
+                (self.body)
+            }
+        };
+        Html(page.into_string()).into_response()
     }
 }
 
@@ -53,10 +72,12 @@ impl From<NotFound> for ErrorPage {
 
 impl axum::response::IntoResponse for ErrorPage {
     fn into_response(self) -> axum::response::Response {
-        Page::from(maud::html! {
-            h1 { "Error:" }
-            p { (self.0) }
-        })
+        Page::new(
+            "Error",
+            maud::html! {
+                p { (self.0) }
+            },
+        )
         .into_response()
     }
 }
@@ -77,7 +98,7 @@ async fn render_group(
     let group = state.db.find_group_by_id(&params.id).await?;
 
     let mut entries = vec![];
-    for embedding_id in group.value.embedding_ids.iter() {
+    for embedding_id in &group.value.embedding_ids {
         let embedding = state.db.find_embedding_by_id(embedding_id).await?;
         let translation = state
             .db
@@ -113,7 +134,7 @@ async fn render_group(
         }
     };
 
-    Ok(page.into())
+    Ok(Page::new("Group", page))
 }
 
 async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> {
@@ -179,5 +200,5 @@ async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> 
         }
     };
 
-    Ok(page.into())
+    Ok(Page::new("Index", page))
 }

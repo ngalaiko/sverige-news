@@ -10,7 +10,7 @@ pub async fn run(
     executor
         .add_job_with_scheduler(
             lightspeed_scheduler::scheduler::Scheduler::Interval {
-                interval_duration: std::time::Duration::from_secs(60 * 15), 
+                interval_duration: std::time::Duration::from_secs(60 * 15),
                 execute_at_startup: true,
             },
             lightspeed_scheduler::job::Job::new("background", "fetch", None, move || {
