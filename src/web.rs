@@ -10,8 +10,9 @@ struct AppState {
     db: db::Client,
 }
 
-pub async fn serve(db: &db::Client, address: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let state = AppState { db: db.clone() };
+#[tracing::instrument(skip_all)]
+pub async fn serve(db: db::Client, address: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let state = AppState { db };
     let router = Router::new()
         .route("/", get(render_index))
         .route("/groups/:id", get(render_group))

@@ -1,10 +1,11 @@
-pub struct Client<'c> {
-    base_url: &'c url::Url,
+#[derive(Clone)]
+pub struct Client {
+    base_url: url::Url,
     http_client: reqwest::Client,
 }
 
-impl<'c> Client<'c> {
-    pub fn new(base_url: &'c url::Url, token: &str) -> Self {
+impl Client {
+    pub fn new(base_url: &url::Url, token: &str) -> Self {
         let http_client = {
             let mut headers = reqwest::header::HeaderMap::new();
             headers.insert(
@@ -18,7 +19,7 @@ impl<'c> Client<'c> {
                 .expect("failed to build reqwest client")
         };
         Self {
-            base_url,
+            base_url: base_url.clone(),
             http_client,
         }
     }
@@ -140,11 +141,11 @@ enum Response<T> {
 }
 
 pub struct Translator<'a> {
-    client: &'a Client<'a>,
+    client: &'a Client,
 }
 
 impl<'a> Translator<'a> {
-    pub fn new(client: &'a Client<'a>) -> Self {
+    pub fn new(client: &'a Client) -> Self {
         Self { client }
     }
 

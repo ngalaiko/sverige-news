@@ -115,9 +115,6 @@ impl Crawler {
         &self,
         feed: &db::Persisted<Feed>,
     ) -> Result<Vec<(Entry, Vec<(FieldName, LanguageCode, String)>)>, CrawlError> {
-        let parser = feed_rs::parser::Builder::new()
-            .base_uri(Some(&feed.value.href))
-            .build();
         let response = self
             .http_client
             .get(feed.value.href.clone())
@@ -125,6 +122,9 @@ impl Crawler {
             .await
             .map_err(CrawlError::Reqwest)?;
         let bytes = response.bytes().await.map_err(CrawlError::Reqwest)?;
+        let parser = feed_rs::parser::Builder::new()
+            .base_uri(Some(&feed.value.href))
+            .build();
         let entries = parser
             .parse(bytes.to_vec().as_slice())
             .map(|feed| feed.entries)
