@@ -78,7 +78,7 @@ async fn group_vectors(
     rayon::spawn(move || {
         let cluster_memberships = Dbscan::params(min_points)
             .tolerance(tolerance)
-            .transform(dataset.clone())
+            .transform(dataset)
             .expect("failed to cluster");
 
         let silhouette_score = cluster_memberships.silhouette_score().unwrap();
