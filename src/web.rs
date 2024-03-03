@@ -49,7 +49,16 @@ impl axum::response::IntoResponse for Page {
                 link rel="stylesheet" href="/index.css";
             }
             body {
-                (self.body)
+                main {
+                    (self.body)
+                }
+            }
+            footer {
+                nav {
+                    ul {
+                        li { a href="https://github.com/ngalaiko/sverige-news" { "GitHub" } }
+                    }
+                }
             }
         };
         Html(page.into_string()).into_response()
@@ -119,8 +128,11 @@ async fn render_group(
     entries.sort_by(|a, b| b.1.value.published_at.cmp(&a.1.value.published_at));
 
     let page = maud::html! {
+        header {
+            a href="/" { "← Back to main page" }
+        }
         ul {
-            @for (feed, entry, translation) in entries {
+            @for (feed, entry, translation) in &entries {
                 li {
                     h3 {
                         a href=(entry.value.href) { (translation.value.value) }
@@ -134,7 +146,12 @@ async fn render_group(
         }
     };
 
-    Ok(Page::new("Group", page))
+    let title = entries
+        .last()
+        .map(|(_, _, translation)| translation.value.value.as_str())
+        .expect("at least one entry is always present in a group");
+
+    Ok(Page::new(&title, page))
 }
 
 async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> {
@@ -173,8 +190,10 @@ async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> 
     gg.sort_by(|a, b| b.2.cmp(&a.2));
 
     let page = maud::html! {
-        h2 {
-            time datetime=(report.created_at.to_rfc3339()) { (report.created_at.format("%A, %e %B")) }
+        header {
+            h2 {
+                time datetime=(report.created_at.to_rfc3339()) { (report.created_at.format("%A, %e %B")) }
+            }
         }
         ul {
             @for (group_id, (feed, entry, translation), count) in gg {
@@ -200,5 +219,7 @@ async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> 
         }
     };
 
-    Ok(Page::new("Index", page))
+    let title = format!("{} in Sweden", report.created_at.format("%A"));
+
+    Ok(Page::new(&title, page))
 }
