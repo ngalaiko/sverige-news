@@ -45,3 +45,4 @@ axum = "0.7"
 maud = "0.26"
 lightspeed_scheduler = { version = "0.57" }
 tower-http = { version = "0.5", features = ["fs", "trace"] }
+rust-embed = { version = "8.3", features = ["mime-guess"] }

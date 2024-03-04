@@ -1,8 +1,10 @@
 use axum::extract::{Path, State};
-use axum::response::Html;
+use axum::http::header::CONTENT_TYPE;
+use axum::http::Uri;
+use axum::response::{Html, IntoResponse};
 use axum::routing::get;
 use axum::Router;
-use tower_http::services::ServeDir;
+use rust_embed::RustEmbed;
 
 use crate::id::Id;
 use crate::{clustering, db, feeds};
@@ -18,7 +20,7 @@ pub async fn serve(db: db::Client, address: &str) -> Result<(), Box<dyn std::err
     let router = Router::new()
         .route("/", get(render_index))
         .route("/groups/:id", get(render_group))
-        .fallback_service(ServeDir::new("assets"))
+        .fallback(serve_asset)
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(address).await?;
     tracing::info!("listening on {}", listener.local_addr().unwrap());
@@ -101,6 +103,7 @@ struct NotFound;
 struct GroupParams {
     id: Id<clustering::ReportGroup>,
 }
+
 async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> {
     let report = state.db.find_latest_report().await?;
     let groups = state.db.list_groups_by_report_id(&report.id).await?;
@@ -235,4 +238,17 @@ async fn render_group(
         .expect("at least one entry is always present in a group");
 
     Ok(Page::new(&title, page))
+}
+
+#[derive(RustEmbed)]
+#[folder = "assets"]
+struct Assets;
+
+async fn serve_asset(uri: Uri) -> Result<impl IntoResponse, ErrorPage> {
+    let Some(asset) = Assets::get(uri.path().trim_start_matches('/')) else {
+        return Err(ErrorPage::from(NotFound));
+    };
+    let content_type = asset.metadata.mimetype();
+    let bytes = asset.data.to_vec();
+    Ok(([(CONTENT_TYPE, content_type.to_string())], bytes))
 }
