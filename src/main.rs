@@ -16,7 +16,7 @@ use clap::Parser;
 struct Cli {
     #[arg(long, default_value = "database.sqlite3")]
     database_file: std::path::PathBuf,
-    #[arg(long)]
+    #[arg(long, env)]
     openai_token: String,
     #[arg(long, default_value = "https://api.openai.com/")]
     openai_base_url: Url,
