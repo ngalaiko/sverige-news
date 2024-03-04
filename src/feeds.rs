@@ -13,7 +13,7 @@ pub struct Entry {
     pub published_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum FieldName {
     Title,
 }
@@ -41,7 +41,7 @@ impl std::fmt::Display for FieldName {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum LanguageCode {
     EN,
     SV,
@@ -72,7 +72,7 @@ impl std::fmt::Display for LanguageCode {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Field {
     pub entry_id: db::Id<Entry>,
     pub name: FieldName,

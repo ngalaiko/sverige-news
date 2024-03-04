@@ -50,7 +50,7 @@ impl Client {
     #[tracing::instrument(skip_all, fields(entry_id = %field.entry_id, name = %field.name, lang_code = %field.lang_code, md5_hash = ?field.md5_hash))]
     pub async fn insert_field(
         &self,
-        field: &feeds::Field,
+        field: feeds::Field,
     ) -> Result<Option<Persisted<feeds::Field>>, sqlx::Error> {
         sqlx::query_as("INSERT OR IGNORE INTO fields (entry_id, name, lang_code, md5_hash) VALUES (?, ?, ?, ?) RETURNING *")
             .bind(u32::from(field.entry_id))
@@ -61,34 +61,16 @@ impl Client {
             .await
     }
 
-    #[tracing::instrument(skip(self))]
-    pub async fn list_sv_fields_without_en_translation_by_date(
+    pub async fn find_field_by_entry_id_lang_code(
         &self,
-        date: &chrono::NaiveDate,
-    ) -> Result<Vec<Persisted<feeds::Field>>, sqlx::Error> {
-        let date = date
-            .and_hms_opt(0, 0, 0)
-            .expect("failed to convert date to datetime");
-        sqlx::query_as(
-            "SELECT fields.*
-            FROM fields
-                JOIN entries ON entries.id = fields.entry_id
-                    AND entries.published_at >= DATETIME($1, 'start of day')
-                    AND entries.published_at < DATETIME($1, 'start of day', '+1 day')
-            WHERE
-                lang_code = 'sv'
-                AND NOT EXISTS (
-                    SELECT 1
-                    FROM fields AS en
-                    WHERE
-                        en.entry_id = fields.entry_id
-                        AND en.name = fields.name
-                        AND en.lang_code = 'en'
-                )",
-        )
-        .bind(date)
-        .fetch_all(&self.pool)
-        .await
+        entry_id: &Id<feeds::Entry>,
+        lang_code: &feeds::LanguageCode,
+    ) -> Result<Option<Persisted<feeds::Field>>, sqlx::Error> {
+        sqlx::query_as("SELECT * FROM fields WHERE entry_id = ? AND lang_code = ?")
+            .bind(entry_id)
+            .bind(lang_code.to_string())
+            .fetch_optional(&self.pool)
+            .await
     }
 
     #[tracing::instrument(skip(self))]
@@ -168,7 +150,7 @@ impl Client {
     #[tracing::instrument(skip_all, fields(md5_hash = ?transaslation.md5_hash))]
     pub async fn insert_translation(
         &self,
-        transaslation: &feeds::Translation,
+        transaslation: feeds::Translation,
     ) -> Result<Option<Persisted<feeds::Translation>>, sqlx::Error> {
         sqlx::query_as(
             "INSERT OR IGNORE INTO translations (md5_hash, value) VALUES (?, ?) RETURNING *",
@@ -242,7 +224,7 @@ impl Client {
     #[tracing::instrument(skip_all)]
     pub async fn insert_report_group(
         &self,
-        group: &ReportGroup,
+        group: ReportGroup,
     ) -> Result<Persisted<ReportGroup>, sqlx::Error> {
         use sqlx::{Executor, Row};
 

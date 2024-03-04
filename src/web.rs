@@ -4,7 +4,7 @@ use axum::routing::get;
 use axum::Router;
 use tower_http::services::ServeDir;
 
-use crate::db;
+use crate::{db, feeds};
 
 #[derive(Clone)]
 struct AppState {
@@ -99,61 +99,6 @@ struct NotFound;
 struct GroupParams {
     id: db::Id<db::ReportGroup>,
 }
-
-async fn render_group(
-    State(state): State<AppState>,
-    Path(params): Path<GroupParams>,
-) -> Result<Page, ErrorPage> {
-    let group = state.db.find_group_by_id(&params.id).await?;
-
-    let mut entries = vec![];
-    for embedding_id in &group.value.embedding_ids {
-        let embedding = state.db.find_embedding_by_id(embedding_id).await?;
-        let translation = state
-            .db
-            .find_translation_by_md5_hash(&embedding.value.md5_hash)
-            .await?;
-        let fields = state
-            .db
-            .list_fields_by_md5_hash(&translation.value.md5_hash)
-            .await?;
-
-        for field in fields {
-            let entry = state.db.find_entry_by_id(&field.value.entry_id).await?;
-            let feed = state.db.find_feed_by_id(&entry.value.feed_id).await?;
-            entries.push((feed, entry, translation.clone()));
-        }
-    }
-
-    entries.sort_by(|a, b| b.1.value.published_at.cmp(&a.1.value.published_at));
-
-    let page = maud::html! {
-        header {
-            a href="/" { "← Back to main page" }
-        }
-        ul {
-            @for (feed, entry, translation) in &entries {
-                li {
-                    h3 {
-                        a href=(entry.value.href) { (translation.value.value) }
-                    }
-                    p {
-                        time datetime=(entry.value.published_at.to_rfc3339()) { (entry.value.published_at.format("%H:%M")) }
-                        " by " (feed.value.title)
-                    }
-                }
-            }
-        }
-    };
-
-    let title = entries
-        .last()
-        .map(|(_, _, translation)| translation.value.value.as_str())
-        .expect("at least one entry is always present in a group");
-
-    Ok(Page::new(&title, page))
-}
-
 async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> {
     let report = state.db.find_latest_report().await?;
     let groups = state.db.list_groups_by_report_id(&report.id).await?;
@@ -163,19 +108,26 @@ async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> 
         let mut entries = vec![];
         for embedding_id in &group.value.embedding_ids {
             let embedding = state.db.find_embedding_by_id(embedding_id).await?;
-            let translation = state
-                .db
-                .find_translation_by_md5_hash(&embedding.value.md5_hash)
-                .await?;
             let fields = state
                 .db
-                .list_fields_by_md5_hash(&translation.value.md5_hash)
+                .list_fields_by_md5_hash(&embedding.value.md5_hash)
                 .await?;
-
             for field in fields {
+                let en_field = state
+                    .db
+                    .find_field_by_entry_id_lang_code(
+                        &field.value.entry_id,
+                        &feeds::LanguageCode::EN,
+                    )
+                    .await?
+                    .expect("translation must exist");
+                let en_translation = state
+                    .db
+                    .find_translation_by_md5_hash(&en_field.value.md5_hash)
+                    .await?;
                 let entry = state.db.find_entry_by_id(&field.value.entry_id).await?;
                 let feed = state.db.find_feed_by_id(&entry.value.feed_id).await?;
-                entries.push((feed, entry, translation.clone()));
+                entries.push((feed, entry, en_translation.clone()));
             }
         }
 
@@ -220,6 +172,65 @@ async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> 
     };
 
     let title = format!("{} in Sweden", report.created_at.format("%A"));
+
+    Ok(Page::new(&title, page))
+}
+
+async fn render_group(
+    State(state): State<AppState>,
+    Path(params): Path<GroupParams>,
+) -> Result<Page, ErrorPage> {
+    let group = state.db.find_group_by_id(&params.id).await?;
+
+    let mut entries = vec![];
+    for embedding_id in &group.value.embedding_ids {
+        let embedding = state.db.find_embedding_by_id(embedding_id).await?;
+        let fields = state
+            .db
+            .list_fields_by_md5_hash(&embedding.value.md5_hash)
+            .await?;
+
+        for field in fields {
+            let entry = state.db.find_entry_by_id(&field.value.entry_id).await?;
+            let en_field = state
+                .db
+                .find_field_by_entry_id_lang_code(&field.value.entry_id, &feeds::LanguageCode::EN)
+                .await?
+                .expect("translation must exist");
+            let translation = state
+                .db
+                .find_translation_by_md5_hash(&en_field.value.md5_hash)
+                .await?;
+            let feed = state.db.find_feed_by_id(&entry.value.feed_id).await?;
+            entries.push((feed, entry, translation.clone()));
+        }
+    }
+
+    entries.sort_by(|a, b| b.1.value.published_at.cmp(&a.1.value.published_at));
+
+    let page = maud::html! {
+        header {
+            a href="/" { "← Back to main page" }
+        }
+        ul {
+            @for (feed, entry, translation) in &entries {
+                li {
+                    h3 {
+                        a href=(entry.value.href) { (translation.value.value) }
+                    }
+                    p {
+                        time datetime=(entry.value.published_at.to_rfc3339()) { (entry.value.published_at.format("%H:%M")) }
+                        " by " (feed.value.title)
+                    }
+                }
+            }
+        }
+    };
+
+    let title = entries
+        .last()
+        .map(|(_, _, translation)| translation.value.value.as_str())
+        .expect("at least one entry is always present in a group");
 
     Ok(Page::new(&title, page))
 }

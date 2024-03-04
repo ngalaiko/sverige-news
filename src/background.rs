@@ -30,33 +30,11 @@ type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 #[tracing::instrument(skip_all)]
 async fn fetch(db: &db::Client, openai_client: &openai::Client) -> Result<(), Error> {
-    let translator = openai::Translator::new(openai_client);
     let crawler = feeds::Crawler::default();
 
     crawl(db, &crawler).await?;
-    translate(db, &translator).await?;
     generate_embeddings(db, openai_client).await?;
-
-    let today_en_title_embeddings = db
-        .list_embeddings_by_field_name_lang_code_date(
-            feeds::FieldName::Title,
-            feeds::LanguageCode::EN,
-            chrono::Utc::now().date_naive(),
-        )
-        .await?;
-
-    let (groups, score) =
-        clustering::group_embeddings(&today_en_title_embeddings, 2, 0.75..=1.0).await;
-
-    let report = db.insert_report(&db::Report { score }).await?;
-
-    for embedding_ids in groups {
-        let group = db::ReportGroup {
-            report_id: report.id,
-            embedding_ids,
-        };
-        db.insert_report_group(&group).await?;
-    }
+    generate_report(db, openai_client).await?;
 
     Ok(())
 }
@@ -88,8 +66,8 @@ async fn crawl(db: &db::Client, crawler: &feeds::Crawler) -> Result<(), Error> {
 
             for (sv_field, sv_translation) in fields {
                 futures::try_join!(
-                    db.insert_field(&sv_field),
-                    db.insert_translation(&sv_translation)
+                    db.insert_field(sv_field),
+                    db.insert_translation(sv_translation)
                 )?;
             }
         }
@@ -99,43 +77,10 @@ async fn crawl(db: &db::Client, crawler: &feeds::Crawler) -> Result<(), Error> {
 }
 
 #[tracing::instrument(skip_all)]
-async fn translate(db: &db::Client, translator: &openai::Translator<'_>) -> Result<(), Error> {
-    let untranslated_sv_fields = db
-        .list_sv_fields_without_en_translation_by_date(&chrono::Utc::now().date_naive())
-        .await?;
-
-    for sv_field in untranslated_sv_fields {
-        let sv_translation = db
-            .find_translation_by_md5_hash(&sv_field.value.md5_hash)
-            .await?;
-
-        let translation = translator
-            .translate_sv_to_en(&sv_translation.value.value)
-            .await?;
-
-        let md5_hash = md5::compute(&translation);
-        futures::future::try_join(
-            db.insert_translation(&feeds::Translation {
-                md5_hash,
-                value: translation,
-            }),
-            db.insert_field(&feeds::Field {
-                md5_hash,
-                lang_code: feeds::LanguageCode::EN,
-                ..sv_field.value
-            }),
-        )
-        .await?;
-    }
-
-    Ok(())
-}
-
-#[tracing::instrument(skip_all)]
 async fn generate_embeddings(db: &db::Client, openai_client: &openai::Client) -> Result<(), Error> {
     let translations_without_embeddings = db
         .list_translations_without_embeddings_by_lang_code_date(
-            feeds::LanguageCode::EN,
+            feeds::LanguageCode::SV,
             &chrono::Utc::now().date_naive(),
         )
         .await?;
@@ -153,5 +98,85 @@ async fn generate_embeddings(db: &db::Client, openai_client: &openai::Client) ->
         })
         .await?;
     }
+    Ok(())
+}
+
+#[tracing::instrument(skip_all)]
+async fn generate_report(db: &db::Client, openai_client: &openai::Client) -> Result<(), Error> {
+    let today_title_embeddings = db
+        .list_embeddings_by_field_name_lang_code_date(
+            feeds::FieldName::Title,
+            feeds::LanguageCode::SV,
+            chrono::Utc::now().date_naive(),
+        )
+        .await?;
+
+    let (groups, score) =
+        clustering::group_embeddings(&today_title_embeddings, 3, 0.75..=1.0).await;
+
+    let translator = openai::Translator::new(openai_client);
+    futures::future::try_join_all(
+        groups
+            .iter()
+            .flatten()
+            .map(|id| translate(db, &translator, id, feeds::LanguageCode::EN)),
+    )
+    .await?;
+
+    let report = db.insert_report(&db::Report { score }).await?;
+    futures::future::try_join_all(groups.into_iter().map(|embedding_ids| {
+        db.insert_report_group(db::ReportGroup {
+            report_id: report.id,
+            embedding_ids,
+        })
+    }))
+    .await?;
+
+    Ok(())
+}
+
+#[tracing::instrument(skip_all)]
+async fn translate(
+    db: &db::Client,
+    translator: &openai::Translator<'_>,
+    embedding_id: &db::Id<db::Embedding>,
+    lang_code: feeds::LanguageCode,
+) -> Result<(), Error> {
+    let embedding = db.find_embedding_by_id(embedding_id).await?;
+    let (translation, fields) = futures::future::try_join(
+        db.find_translation_by_md5_hash(&embedding.value.md5_hash),
+        db.list_fields_by_md5_hash(&embedding.value.md5_hash),
+    )
+    .await?;
+
+    if fields
+        .iter()
+        .all(|field| field.value.lang_code == lang_code)
+    {
+        return Ok(());
+    }
+
+    let translation = translator
+        .translate_sv_to_en(&translation.value.value)
+        .await?;
+    let md5_hash = md5::compute(&translation);
+
+    futures::future::try_join(
+        futures::future::try_join_all(fields.iter().map(|_| {
+            db.insert_translation(feeds::Translation {
+                md5_hash: md5_hash.clone(),
+                value: translation.clone(),
+            })
+        })),
+        futures::future::try_join_all(fields.iter().map(|field| {
+            db.insert_field(feeds::Field {
+                md5_hash,
+                lang_code: feeds::LanguageCode::EN,
+                ..field.value.clone()
+            })
+        })),
+    )
+    .await?;
+
     Ok(())
 }
