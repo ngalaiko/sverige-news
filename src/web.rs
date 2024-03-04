@@ -5,6 +5,9 @@ use axum::response::{Html, IntoResponse};
 use axum::routing::get;
 use axum::Router;
 use rust_embed::RustEmbed;
+use tower_http::compression::CompressionLayer;
+use tower_http::trace::{self, TraceLayer};
+use tracing::Level;
 
 use crate::id::Id;
 use crate::{clustering, db, feeds};
@@ -21,7 +24,19 @@ pub async fn serve(db: db::Client, address: &str) -> Result<(), Box<dyn std::err
         .route("/", get(render_index))
         .route("/groups/:id", get(render_group))
         .fallback(serve_asset)
-        .with_state(state);
+        .with_state(state)
+        .layer(
+            CompressionLayer::new()
+                .br(true)
+                .deflate(true)
+                .gzip(true)
+                .zstd(true),
+        )
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(trace::DefaultMakeSpan::new().level(Level::INFO))
+                .on_response(trace::DefaultOnResponse::new().level(Level::INFO)),
+        );
     let listener = tokio::net::TcpListener::bind(address).await?;
     tracing::info!("listening on {}", listener.local_addr().unwrap());
     axum::serve(listener, router).await?;
