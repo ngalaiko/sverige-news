@@ -1,4 +1,4 @@
-use crate::{clustering, db, feeds, openai};
+use crate::{clustering, db, feeds, id::Id, md5_hash, openai};
 
 #[tracing::instrument(skip_all)]
 pub async fn run(
@@ -49,7 +49,7 @@ async fn crawl(db: &db::Client, crawler: &feeds::Crawler) -> Result<(), Error> {
     for (entry, fields) in entries.into_iter().flatten() {
         if let Some(entry) = db.insert_entry(&entry).await? {
             let fields = fields.into_iter().map(|(name, lang_code, value)| {
-                let md5_hash = md5::compute(&value);
+                let md5_hash = md5_hash::compute(&value);
                 (
                     feeds::Field {
                         entry_id: entry.id,
@@ -88,7 +88,7 @@ async fn generate_embeddings(db: &db::Client, openai_client: &openai::Client) ->
     for translation in translations_without_embeddings {
         let embedding = openai_client.embeddings(&translation.value.value).await?;
 
-        db.insert_embeddig(&db::Embedding {
+        db.insert_embeddig(&clustering::Embedding {
             md5_hash: translation.value.md5_hash,
             size: embedding
                 .len()
@@ -123,9 +123,9 @@ async fn generate_report(db: &db::Client, openai_client: &openai::Client) -> Res
     )
     .await?;
 
-    let report = db.insert_report(&db::Report { score }).await?;
+    let report = db.insert_report(&clustering::Report { score }).await?;
     futures::future::try_join_all(groups.into_iter().map(|embedding_ids| {
-        db.insert_report_group(db::ReportGroup {
+        db.insert_report_group(clustering::ReportGroup {
             report_id: report.id,
             embedding_ids,
         })
@@ -139,7 +139,7 @@ async fn generate_report(db: &db::Client, openai_client: &openai::Client) -> Res
 async fn translate(
     db: &db::Client,
     translator: &openai::Translator<'_>,
-    embedding_id: &db::Id<db::Embedding>,
+    embedding_id: &Id<clustering::Embedding>,
     lang_code: feeds::LanguageCode,
 ) -> Result<(), Error> {
     let embedding = db.find_embedding_by_id(embedding_id).await?;
@@ -159,7 +159,7 @@ async fn translate(
     let translation = translator
         .translate_sv_to_en(&translation.value.value)
         .await?;
-    let md5_hash = md5::compute(&translation);
+    let md5_hash = md5_hash::compute(&translation);
 
     futures::future::try_join(
         futures::future::try_join_all(fields.iter().map(|_| {

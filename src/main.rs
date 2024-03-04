@@ -2,9 +2,14 @@ mod background;
 mod clustering;
 mod db;
 mod feeds;
+mod id;
+mod md5_hash;
 mod openai;
+mod persisted;
+mod url;
 mod web;
 
+use ::url::Url;
 use clap::Parser;
 
 #[derive(Parser)]
@@ -14,7 +19,7 @@ struct Cli {
     #[arg(long)]
     openai_token: String,
     #[arg(long, default_value = "https://api.openai.com/")]
-    openai_base_url: url::Url,
+    openai_base_url: Url,
     #[arg(long, default_value = "127.0.0.1:8080")]
     address: String,
 }

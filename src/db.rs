@@ -1,4 +1,10 @@
-use crate::feeds;
+use crate::{
+    clustering::{self, Embedding},
+    feeds,
+    id::Id,
+    md5_hash::Md5Hash,
+    persisted::Persisted,
+};
 
 #[derive(Clone)]
 pub struct Client {
@@ -28,7 +34,7 @@ impl Client {
             "INSERT OR IGNORE INTO entries (href, feed_id, published_at) VALUES ( ?, ?, ?) RETURNING *",
         )
         .bind(entry.href.to_string())
-        .bind(u32::from(entry.feed_id))
+        .bind(entry.feed_id)
         .bind(entry.published_at)
         .fetch_optional(&self.pool)
         .await
@@ -53,10 +59,10 @@ impl Client {
         field: feeds::Field,
     ) -> Result<Option<Persisted<feeds::Field>>, sqlx::Error> {
         sqlx::query_as("INSERT OR IGNORE INTO fields (entry_id, name, lang_code, md5_hash) VALUES (?, ?, ?, ?) RETURNING *")
-            .bind(u32::from(field.entry_id))
+            .bind(field.entry_id)
             .bind(field.name.to_string())
             .bind(field.lang_code.to_string())
-            .bind(field.md5_hash.to_vec())
+            .bind(field.md5_hash)
             .fetch_optional(&self.pool)
             .await
     }
@@ -76,10 +82,10 @@ impl Client {
     #[tracing::instrument(skip(self))]
     pub async fn list_fields_by_md5_hash(
         &self,
-        md5_hash: &md5::Digest,
+        md5_hash: &Md5Hash,
     ) -> Result<Vec<Persisted<feeds::Field>>, sqlx::Error> {
         sqlx::query_as("SELECT * FROM fields WHERE md5_hash = ?")
-            .bind(md5_hash.to_vec())
+            .bind(md5_hash)
             .fetch_all(&self.pool)
             .await
     }
@@ -89,12 +95,12 @@ impl Client {
     #[tracing::instrument(skip_all, fields(md5_hash = ?embedding.md5_hash, size = %embedding.size))]
     pub async fn insert_embeddig(
         &self,
-        embedding: &Embedding,
-    ) -> Result<Option<Persisted<Embedding>>, sqlx::Error> {
+        embedding: &clustering::Embedding,
+    ) -> Result<Option<Persisted<clustering::Embedding>>, sqlx::Error> {
         sqlx::query_as(
             "INSERT OR IGNORE INTO embeddings (md5_hash, value, size) VALUES ( ?, ?, ? ) RETURNING *",
         )
-        .bind(embedding.md5_hash.to_vec())
+        .bind(&embedding.md5_hash)
         .bind(serde_json::to_string(&embedding.value).expect("failed to serialize embedding"))
         .bind(embedding.size)
         .fetch_optional(&self.pool)
@@ -107,7 +113,7 @@ impl Client {
         field_name: feeds::FieldName,
         lang_code: feeds::LanguageCode,
         date: chrono::NaiveDate,
-    ) -> Result<Vec<Persisted<Embedding>>, sqlx::Error> {
+    ) -> Result<Vec<Persisted<clustering::Embedding>>, sqlx::Error> {
         let date = date
             .and_hms_opt(0, 0, 0)
             .expect("failed to create start of day");
@@ -137,8 +143,8 @@ impl Client {
     #[tracing::instrument(skip(self))]
     pub async fn find_embedding_by_id(
         &self,
-        id: &Id<Embedding>,
-    ) -> Result<Persisted<Embedding>, sqlx::Error> {
+        id: &Id<clustering::Embedding>,
+    ) -> Result<Persisted<clustering::Embedding>, sqlx::Error> {
         sqlx::query_as("SELECT * FROM embeddings WHERE id = ?")
             .bind(id)
             .fetch_one(&self.pool)
@@ -155,7 +161,7 @@ impl Client {
         sqlx::query_as(
             "INSERT OR IGNORE INTO translations (md5_hash, value) VALUES (?, ?) RETURNING *",
         )
-        .bind(transaslation.md5_hash.to_vec())
+        .bind(transaslation.md5_hash)
         .bind(transaslation.value.to_string())
         .fetch_optional(&self.pool)
         .await
@@ -164,10 +170,10 @@ impl Client {
     #[tracing::instrument(skip(self), fields(md5_hash = ?md5_hash))]
     pub async fn find_translation_by_md5_hash(
         &self,
-        md5_hash: &md5::Digest,
+        md5_hash: &Md5Hash,
     ) -> Result<Persisted<feeds::Translation>, sqlx::Error> {
         sqlx::query_as("SELECT * FROM translations WHERE md5_hash = ?")
-            .bind(md5_hash.to_vec())
+            .bind(md5_hash)
             .fetch_one(&self.pool)
             .await
     }
@@ -224,8 +230,8 @@ impl Client {
     #[tracing::instrument(skip_all)]
     pub async fn insert_report_group(
         &self,
-        group: ReportGroup,
-    ) -> Result<Persisted<ReportGroup>, sqlx::Error> {
+        group: clustering::ReportGroup,
+    ) -> Result<Persisted<clustering::ReportGroup>, sqlx::Error> {
         use sqlx::{Executor, Row};
 
         let mut transaction = self.pool.begin().await?;
@@ -236,28 +242,30 @@ impl Client {
                     .bind(group.report_id),
             )
             .await?;
-        let group_id: u32 = group_insert_result.try_get("id")?;
+        let group_id = group_insert_result.try_get("id")?;
 
         for embedding_id in &group.embedding_ids {
-            transaction
-                                .execute(
-                                    sqlx::query("INSERT INTO report_group_embeddings (report_group_id, embedding_id) VALUES (?, ?)")
-                                        .bind(group_id)
-                                        .bind(embedding_id),
-                                ).await?;
+            transaction.execute(
+                sqlx::query("INSERT INTO report_group_embeddings (report_group_id, embedding_id) VALUES (?, ?)")
+                    .bind(group_id)
+                    .bind(embedding_id),
+            ).await?;
         }
 
         transaction.commit().await?;
 
         Ok(Persisted {
-            id: Id::from(group_id),
+            id: group_id,
             created_at: chrono::Utc::now(),
             value: group.clone(),
         })
     }
 
     #[tracing::instrument(skip(self))]
-    pub async fn insert_report(&self, report: &Report) -> Result<Persisted<Report>, sqlx::Error> {
+    pub async fn insert_report(
+        &self,
+        report: &clustering::Report,
+    ) -> Result<Persisted<clustering::Report>, sqlx::Error> {
         sqlx::query_as("INSERT INTO reports (score) VALUES (?) RETURNING *")
             .bind(report.score)
             .fetch_one(&self.pool)
@@ -265,7 +273,7 @@ impl Client {
     }
 
     #[tracing::instrument(skip(self))]
-    pub async fn find_latest_report(&self) -> Result<Persisted<Report>, sqlx::Error> {
+    pub async fn find_latest_report(&self) -> Result<Persisted<clustering::Report>, sqlx::Error> {
         sqlx::query_as("SELECT * FROM reports ORDER BY created_at DESC LIMIT 1")
             .fetch_one(&self.pool)
             .await
@@ -274,8 +282,8 @@ impl Client {
     #[tracing::instrument(skip(self))]
     pub async fn find_group_by_id(
         &self,
-        id: &Id<ReportGroup>,
-    ) -> Result<Persisted<ReportGroup>, sqlx::Error> {
+        id: &Id<clustering::ReportGroup>,
+    ) -> Result<Persisted<clustering::ReportGroup>, sqlx::Error> {
         use sqlx::Row;
 
         let group_result = sqlx::query("SELECT * FROM report_groups WHERE id = ?")
@@ -283,15 +291,15 @@ impl Client {
             .fetch_one(&self.pool)
             .await?;
 
-        let id: u32 = group_result.try_get("id")?;
+        let id = group_result.try_get("id")?;
         let created_at: chrono::DateTime<chrono::Utc> = group_result.try_get("created_at")?;
-        let report_id = group_result.try_get::<u32, _>("report_id")?;
+        let report_id = group_result.try_get("report_id")?;
         Ok(Persisted {
-            id: Id::from(id),
+            id,
             created_at,
-            value: ReportGroup {
-                report_id: Id::from(report_id),
-                embedding_ids: self.list_embedding_ids_by_group_id(&Id::from(id)).await?,
+            value: clustering::ReportGroup {
+                report_id,
+                embedding_ids: self.list_embedding_ids_by_group_id(&id).await?,
             },
         })
     }
@@ -299,8 +307,8 @@ impl Client {
     #[tracing::instrument(skip(self))]
     pub async fn list_groups_by_report_id(
         &self,
-        report_id: &Id<Report>,
-    ) -> Result<Vec<Persisted<ReportGroup>>, sqlx::Error> {
+        report_id: &Id<clustering::Report>,
+    ) -> Result<Vec<Persisted<clustering::ReportGroup>>, sqlx::Error> {
         use sqlx::Row;
 
         let groups = sqlx::query("SELECT * FROM report_groups WHERE report_id = ?")
@@ -310,14 +318,14 @@ impl Client {
 
         let mut result = Vec::with_capacity(groups.len());
         for group in groups {
-            let id: u32 = group.try_get("id")?;
+            let id = group.try_get("id")?;
             let created_at: chrono::DateTime<chrono::Utc> = group.try_get("created_at")?;
-            let value = ReportGroup {
+            let value = clustering::ReportGroup {
                 report_id: *report_id,
-                embedding_ids: self.list_embedding_ids_by_group_id(&Id::from(id)).await?,
+                embedding_ids: self.list_embedding_ids_by_group_id(&id).await?,
             };
             result.push(Persisted {
-                id: Id::from(id),
+                id,
                 created_at,
                 value,
             });
@@ -329,8 +337,8 @@ impl Client {
     #[tracing::instrument(skip(self))]
     pub async fn list_embedding_ids_by_group_id(
         &self,
-        group_id: &Id<ReportGroup>,
-    ) -> Result<Vec<Id<Embedding>>, sqlx::Error> {
+        group_id: &Id<clustering::ReportGroup>,
+    ) -> Result<Vec<Id<clustering::Embedding>>, sqlx::Error> {
         use sqlx::Row;
 
         let rows = sqlx::query(
@@ -342,244 +350,29 @@ impl Client {
 
         let mut result = Vec::with_capacity(rows.len());
         for row in rows {
-            let id: u32 = row.try_get("embedding_id")?;
-            result.push(Id::from(id));
+            let id = row.try_get("embedding_id")?;
+            result.push(id);
         }
 
         Ok(result)
     }
 }
 
-pub struct Id<T>(u32, std::marker::PhantomData<T>);
-
-impl<'de, T> serde::Deserialize<'de> for Id<T> {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = u32::deserialize(deserializer)?;
-        Ok(Id(value, std::marker::PhantomData))
-    }
-}
-
-impl<T> Clone for Id<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T> std::fmt::Display for Id<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl<T> std::fmt::Debug for Id<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl<T> Copy for Id<T> {}
-
-impl<T> From<u32> for Id<T> {
-    fn from(value: u32) -> Self {
-        Self(value, std::marker::PhantomData)
-    }
-}
-
-impl<T> From<Id<T>> for u32 {
-    fn from(value: Id<T>) -> Self {
-        value.0
-    }
-}
-
-impl<T> sqlx::Encode<'_, sqlx::Sqlite> for Id<T> {
-    fn encode_by_ref(
-        &self,
-        buf: &mut <sqlx::Sqlite as sqlx::database::HasArguments<'_>>::ArgumentBuffer,
-    ) -> sqlx::encode::IsNull {
-        self.0.encode_by_ref(buf)
-    }
-}
-
-impl<T> sqlx::Type<sqlx::Sqlite> for Id<T> {
-    fn type_info() -> <sqlx::Sqlite as sqlx::Database>::TypeInfo {
-        <u32 as sqlx::Type<sqlx::Sqlite>>::type_info()
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Embedding {
-    pub md5_hash: md5::Digest,
-    pub value: Vec<f32>,
-    pub size: u32,
-}
-
-#[derive(Debug, Clone)]
-pub struct Persisted<T> {
-    pub id: Id<T>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub value: T,
-}
-
-impl sqlx::FromRow<'_, sqlx::sqlite::SqliteRow> for Persisted<feeds::Feed> {
-    fn from_row(row: &'_ sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
+impl<'a> sqlx::FromRow<'a, sqlx::sqlite::SqliteRow> for Embedding {
+    fn from_row(row: &'a sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
         use sqlx::Row;
 
-        let id: u32 = row.try_get("id")?;
-        let created_at = row.try_get("created_at")?;
-
-        let href: &str = row.try_get("href")?;
-        let href = url::Url::parse(href).map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
-        let title = row.try_get("title")?;
-
-        Ok(Persisted {
-            id: id.into(),
-            created_at,
-            value: feeds::Feed { href, title },
-        })
-    }
-}
-
-impl sqlx::FromRow<'_, sqlx::sqlite::SqliteRow> for Persisted<feeds::Entry> {
-    fn from_row(row: &'_ sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
-        use sqlx::Row;
-
-        let id: u32 = row.try_get("id")?;
-        let created_at = row.try_get("created_at")?;
-
-        let href: &str = row.try_get("href")?;
-        let href = url::Url::parse(href).map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
-        let feed_id: u32 = row.try_get("feed_id")?;
-        let published_at = row.try_get("published_at")?;
-
-        Ok(Persisted {
-            id: id.into(),
-            created_at,
-            value: feeds::Entry {
-                href,
-                feed_id: feed_id.into(),
-                published_at,
-            },
-        })
-    }
-}
-
-impl sqlx::FromRow<'_, sqlx::sqlite::SqliteRow> for Persisted<feeds::Field> {
-    fn from_row(row: &'_ sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
-        use sqlx::Row;
-
-        let id: u32 = row.try_get("id")?;
-        let created_at = row.try_get("created_at")?;
-
-        let entry_id: u32 = row.try_get("entry_id")?;
-        let md5_hash: Vec<u8> = row.try_get("md5_hash")?;
-        let md5_hash: [u8; 16] = md5_hash
-            .try_into()
-            .map_err(|_| sqlx::Error::Decode(Box::new(InvalidMd5HashLength)))?;
-        let name: &str = row.try_get("name")?;
-        let name: feeds::FieldName = name
-            .parse()
-            .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
-        let lang_code: &str = row.try_get("lang_code")?;
-        let lang_code = lang_code
-            .parse()
-            .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
-
-        Ok(Persisted {
-            id: id.into(),
-            created_at,
-            value: feeds::Field {
-                entry_id: entry_id.into(),
-                md5_hash: md5::Digest(md5_hash),
-                name,
-                lang_code,
-            },
-        })
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("invalid md5 hash length")]
-struct InvalidMd5HashLength;
-
-impl sqlx::FromRow<'_, sqlx::sqlite::SqliteRow> for Persisted<Embedding> {
-    fn from_row(row: &'_ sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
-        use sqlx::Row;
-
-        let id: u32 = row.try_get("id")?;
-        let created_at = row.try_get("created_at")?;
+        let md5_hash = row.try_get("md5_hash")?;
+        let size: u32 = row.try_get("size")?;
 
         let value: String = row.try_get("value")?;
         let value =
             serde_json::from_str(&value).map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
-        let size = row.try_get("size")?;
-        let md5_hash: Vec<u8> = row.try_get("md5_hash")?;
-        let md5_hash: [u8; 16] = md5_hash
-            .try_into()
-            .map_err(|_| sqlx::Error::Decode(Box::new(InvalidMd5HashLength)))?;
 
-        Ok(Persisted {
-            id: id.into(),
-            created_at,
-            value: Embedding {
-                md5_hash: md5::Digest(md5_hash),
-                value,
-                size,
-            },
+        Ok(Embedding {
+            md5_hash,
+            value,
+            size,
         })
     }
-}
-
-impl sqlx::FromRow<'_, sqlx::sqlite::SqliteRow> for Persisted<feeds::Translation> {
-    fn from_row(row: &'_ sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
-        use sqlx::Row;
-
-        let id: u32 = row.try_get("id")?;
-        let created_at = row.try_get("created_at")?;
-
-        let value: String = row.try_get("value")?;
-        let md5_hash: Vec<u8> = row.try_get("md5_hash")?;
-        let md5_hash: [u8; 16] = md5_hash
-            .try_into()
-            .map_err(|_| sqlx::Error::Decode(Box::new(InvalidMd5HashLength)))?;
-
-        Ok(Persisted {
-            id: id.into(),
-            created_at,
-            value: feeds::Translation {
-                md5_hash: md5::Digest(md5_hash),
-                value,
-            },
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Report {
-    pub score: f32,
-}
-
-impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for Persisted<Report> {
-    fn from_row(row: &'r sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
-        use sqlx::Row;
-
-        let id = row.try_get::<u32, _>("id")?;
-        let created_at = row.try_get("created_at")?;
-
-        let score = row.try_get("score")?;
-
-        Ok(Persisted {
-            id: id.into(),
-            created_at,
-            value: Report { score },
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ReportGroup {
-    pub report_id: Id<Report>,
-    pub embedding_ids: Vec<Id<Embedding>>,
 }

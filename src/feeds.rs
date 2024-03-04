@@ -1,15 +1,15 @@
-use crate::db;
+use crate::{id::Id, md5_hash::Md5Hash, persisted::Persisted, url::Url};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Feed {
-    pub href: url::Url,
+    pub href: Url,
     pub title: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Entry {
-    pub feed_id: db::Id<Feed>,
-    pub href: url::Url,
+    pub feed_id: Id<Feed>,
+    pub href: Url,
     pub published_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -21,6 +21,33 @@ pub enum FieldName {
 #[derive(Debug, thiserror::Error)]
 #[error("invalid field name: {0}")]
 pub struct InvalidFieldName(String);
+
+impl<'a> sqlx::Encode<'a, sqlx::Sqlite> for FieldName {
+    fn encode_by_ref(
+        &self,
+        buf: &mut <sqlx::Sqlite as sqlx::database::HasArguments<'a>>::ArgumentBuffer,
+    ) -> sqlx::encode::IsNull {
+        <String as sqlx::Encode<'a, sqlx::sqlite::Sqlite>>::encode(self.to_string(), buf)
+    }
+}
+
+impl sqlx::Decode<'_, sqlx::sqlite::Sqlite> for FieldName {
+    fn decode(
+        value: sqlx::sqlite::SqliteValueRef<'_>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let string = <String as sqlx::Decode<sqlx::sqlite::Sqlite>>::decode(value)?;
+        let name = string
+            .parse()
+            .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
+        Ok(name)
+    }
+}
+
+impl sqlx::Type<sqlx::Sqlite> for FieldName {
+    fn type_info() -> <sqlx::Sqlite as sqlx::Database>::TypeInfo {
+        <&str as sqlx::Type<sqlx::Sqlite>>::type_info()
+    }
+}
 
 impl std::str::FromStr for FieldName {
     type Err = InvalidFieldName;
@@ -51,6 +78,33 @@ pub enum LanguageCode {
 #[error("invalid language code: {0}")]
 pub struct InvalidLanguageCode(String);
 
+impl<'a> sqlx::Encode<'a, sqlx::Sqlite> for LanguageCode {
+    fn encode_by_ref(
+        &self,
+        buf: &mut <sqlx::Sqlite as sqlx::database::HasArguments<'a>>::ArgumentBuffer,
+    ) -> sqlx::encode::IsNull {
+        <String as sqlx::Encode<'a, sqlx::sqlite::Sqlite>>::encode(self.to_string(), buf)
+    }
+}
+
+impl sqlx::Decode<'_, sqlx::sqlite::Sqlite> for LanguageCode {
+    fn decode(
+        value: sqlx::sqlite::SqliteValueRef<'_>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let string = <String as sqlx::Decode<sqlx::sqlite::Sqlite>>::decode(value)?;
+        let code = string
+            .parse()
+            .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
+        Ok(code)
+    }
+}
+
+impl sqlx::Type<sqlx::Sqlite> for LanguageCode {
+    fn type_info() -> <sqlx::Sqlite as sqlx::Database>::TypeInfo {
+        <&str as sqlx::Type<sqlx::Sqlite>>::type_info()
+    }
+}
+
 impl std::str::FromStr for LanguageCode {
     type Err = InvalidLanguageCode;
 
@@ -72,17 +126,17 @@ impl std::fmt::Display for LanguageCode {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Field {
-    pub entry_id: db::Id<Entry>,
+    pub entry_id: Id<Entry>,
     pub name: FieldName,
     pub lang_code: LanguageCode,
-    pub md5_hash: md5::Digest,
+    pub md5_hash: Md5Hash,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Translation {
-    pub md5_hash: md5::Digest,
+    pub md5_hash: Md5Hash,
     pub value: String,
 }
 
@@ -113,17 +167,17 @@ impl Crawler {
     #[tracing::instrument(skip_all, fields(href = %feed.value.href))]
     pub async fn crawl(
         &self,
-        feed: &db::Persisted<Feed>,
+        feed: &Persisted<Feed>,
     ) -> Result<Vec<(Entry, Vec<(FieldName, LanguageCode, String)>)>, CrawlError> {
         let response = self
             .http_client
-            .get(feed.value.href.clone())
+            .get(feed.value.href.to_string())
             .send()
             .await
             .map_err(CrawlError::Reqwest)?;
         let bytes = response.bytes().await.map_err(CrawlError::Reqwest)?;
         let parser = feed_rs::parser::Builder::new()
-            .base_uri(Some(&feed.value.href))
+            .base_uri(Some(&feed.value.href.to_string()))
             .build();
         let entries = parser
             .parse(bytes.to_vec().as_slice())
@@ -142,7 +196,7 @@ impl Crawler {
                         .links
                         .first()
                         .map(|link| link.href.as_str())
-                        .and_then(|href| url::Url::parse(href).ok())?,
+                        .and_then(|href| href.parse().ok())?,
                     published_at: entry.updated.or(entry.published)?,
                 };
                 Some((entry, fields))

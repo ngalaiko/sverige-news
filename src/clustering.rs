@@ -1,14 +1,33 @@
-use crate::db;
-
 use linfa::{metrics::SilhouetteScore, traits::Transformer, DatasetBase};
 use linfa_clustering::Dbscan;
+use linfa_nn::{distance, CommonNearestNeighbour};
 use ndarray::Array2;
 
+use crate::{id::Id, md5_hash::Md5Hash, persisted::Persisted};
+
+#[derive(Debug, Clone)]
+pub struct Embedding {
+    pub md5_hash: Md5Hash,
+    pub value: Vec<f32>,
+    pub size: u32,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct Report {
+    pub score: f32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReportGroup {
+    pub report_id: Id<Report>,
+    pub embedding_ids: Vec<Id<Embedding>>,
+}
+
 pub async fn group_embeddings(
-    embeddings: &[db::Persisted<db::Embedding>],
+    embeddings: &[Persisted<Embedding>],
     min_points: usize,
     range: std::ops::RangeInclusive<f32>,
-) -> (Vec<Vec<db::Id<db::Embedding>>>, f32) {
+) -> (Vec<Vec<Id<Embedding>>>, f32) {
     let shape = (embeddings.len(), embeddings[0].value.size as usize);
     // try to reducing dimentions
     let vectors = embeddings
@@ -76,10 +95,14 @@ async fn group_vectors(
     let dataset = DatasetBase::from(vectors.clone());
 
     rayon::spawn(move || {
-        let cluster_memberships = Dbscan::params(min_points)
-            .tolerance(tolerance)
-            .transform(dataset)
-            .expect("failed to cluster");
+        let cluster_memberships = Dbscan::params_with(
+            min_points,
+            distance::L2Dist,
+            CommonNearestNeighbour::BallTree,
+        )
+        .tolerance(tolerance)
+        .transform(dataset)
+        .expect("failed to cluster");
 
         let silhouette_score = cluster_memberships.silhouette_score().unwrap();
 

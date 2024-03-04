@@ -4,7 +4,8 @@ use axum::routing::get;
 use axum::Router;
 use tower_http::services::ServeDir;
 
-use crate::{db, feeds};
+use crate::id::Id;
+use crate::{clustering, db, feeds};
 
 #[derive(Clone)]
 struct AppState {
@@ -97,7 +98,7 @@ struct NotFound;
 
 #[derive(serde::Deserialize)]
 struct GroupParams {
-    id: db::Id<db::ReportGroup>,
+    id: Id<clustering::ReportGroup>,
 }
 async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> {
     let report = state.db.find_latest_report().await?;
