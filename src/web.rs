@@ -46,8 +46,9 @@ impl axum::response::IntoResponse for Page {
             (maud::DOCTYPE)
             head {
                 meta charset="utf-8";
-                title { (self.title) }
+                meta name="viewport" content="width=device-width, initial-scale=1";
                 link rel="stylesheet" href="/index.css";
+                title { (self.title) }
             }
             body {
                 main {
