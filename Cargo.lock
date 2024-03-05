@@ -2577,6 +2577,7 @@ dependencies = [
  "maud",
  "md5",
  "ndarray",
+ "once_cell",
  "rayon",
  "reqwest",
  "rust-embed",

@@ -1,6 +1,5 @@
 use crate::{clustering, db, feeds, id::Id, md5_hash, openai};
 
-#[tracing::instrument(skip_all)]
 pub async fn run(
     db: db::Client,
     openai_client: openai::Client,
@@ -16,7 +15,12 @@ pub async fn run(
             lightspeed_scheduler::job::Job::new("background", "fetch", None, move || {
                 let db = db.clone();
                 let openai_client = openai_client.clone();
-                Box::pin(async move { fetch(&db, &openai_client).await })
+                Box::pin(async move {
+                    fetch(&db, &openai_client).await.map_err(|error| {
+                        tracing::error!("background fetch failed: {}", error);
+                        error
+                    })
+                })
             }),
         )
         .await;
@@ -41,10 +45,8 @@ async fn fetch(db: &db::Client, openai_client: &openai::Client) -> Result<(), Er
 
 #[tracing::instrument(skip_all)]
 async fn crawl(db: &db::Client, crawler: &feeds::Crawler) -> Result<(), Error> {
-    let feeds = db.list_feeds().await?;
-
     let entries =
-        futures::future::try_join_all(feeds.iter().map(|feed| crawler.crawl(feed))).await?;
+        futures::future::try_join_all(feeds::LIST.iter().map(|feed| crawler.crawl(feed))).await?;
 
     for (entry, fields) in entries.into_iter().flatten() {
         if let Some(entry) = db.insert_entry(&entry).await? {

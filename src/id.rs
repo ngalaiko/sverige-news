@@ -1,5 +1,17 @@
 pub struct Id<T>(u32, std::marker::PhantomData<T>);
 
+impl<T> From<u32> for Id<T> {
+    fn from(value: u32) -> Self {
+        Self(value, std::marker::PhantomData)
+    }
+}
+
+impl<T> PartialEq for Id<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
 impl<'de, T> serde::Deserialize<'de> for Id<T> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

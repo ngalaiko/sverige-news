@@ -19,7 +19,7 @@ pub enum FieldName {
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("invalid field name: {0}")]
+#[error("invalid field title: {0}")]
 pub struct InvalidFieldName(String);
 
 impl<'a> sqlx::Encode<'a, sqlx::Sqlite> for FieldName {
@@ -208,3 +208,115 @@ impl Crawler {
         Ok(entries)
     }
 }
+
+pub static LIST: once_cell::sync::Lazy<Vec<Persisted<Feed>>> = once_cell::sync::Lazy::new(|| {
+    let created_at = chrono::DateTime::parse_from_rfc3339("2024-02-29T10:01:20+01:00")
+        .expect("valid timestamp")
+        .with_timezone(&chrono::Utc);
+    vec![
+        Persisted {
+            id: Id::from(1),
+            created_at,
+            value: Feed {
+                title: "SVT Nyheter".to_string(),
+                href: "https://www.svt.se/rss.xml".parse().expect("valid url"),
+            },
+        },
+        Persisted {
+            id: Id::from(2),
+            created_at,
+            value: Feed {
+                title: "Dagens Nyheter".to_string(),
+                href: "https://www.dn.se/rss/".parse().expect("valid url"),
+            },
+        },
+        Persisted {
+            id: Id::from(3),
+            created_at,
+            value: Feed {
+                title: "Svenska Dagbladet".to_string(),
+                href: "https://www.svd.se/feed/articles.rss"
+                    .parse()
+                    .expect("valid url"),
+            },
+        },
+        Persisted {
+            id: Id::from(4),
+            created_at,
+            value: Feed {
+                title: "Aftonbladet".to_string(),
+                href: "https://rss.aftonbladet.se/rss2/small/pages/sections/senastenytt/"
+                    .parse()
+                    .expect("valid url"),
+            },
+        },
+        Persisted {
+            id: Id::from(5),
+            created_at,
+            value: Feed {
+                title: "Expressen".to_string(),
+                href: "https://feeds.expressen.se/nyheter/"
+                    .parse()
+                    .expect("valid url"),
+            },
+        },
+        Persisted {
+            id: Id::from(7),
+            created_at,
+            value: Feed {
+                title: "Dagen".to_string(),
+                href: "https://dagen.se/arc/outboundfeeds/rss"
+                    .parse()
+                    .expect("valid url"),
+            },
+        },
+        Persisted {
+            id: Id::from(8),
+            created_at,
+            value: Feed {
+                title: "Nyheter Idag".to_string(),
+                href: "https://nyheteridag.se/feed".parse().expect("valid url"),
+            },
+        },
+        Persisted {
+            id: Id::from(9),
+            created_at,
+            value: Feed {
+                title: "SVT Nyheter".to_string(),
+                href: "https://www.svt.se/rss.xml".parse().expect("valid url"),
+            },
+        },
+        Persisted {
+            id: Id::from(10),
+            created_at,
+            value: Feed {
+                title: "TV4".to_string(),
+                href: "https://www.tv4.se:443/rss".parse().expect("valid url"),
+            },
+        },
+        Persisted {
+            id: Id::from(12),
+            created_at,
+            value: Feed {
+                href: "https://abcnyheter.se/feed".parse().unwrap(),
+                title: "ABC News".to_string(),
+            },
+        },
+        Persisted {
+            id: Id::from(13),
+            created_at,
+            value: Feed {
+                href: "https://nkpg.news/feed/".parse().expect("valid url"),
+                title: "Nkpg News".to_string(),
+            },
+        },
+        Persisted {
+            id: Id::from(14),
+            created_at,
+            value: Feed {
+                href: "https://skaraborgsnyheter.se/feed".parse().unwrap(),
+                title: "Skaraborgs Nyheter".to_string(),
+            },
+        },
+    ]
+});

@@ -207,26 +207,6 @@ impl Client {
 }
 
 impl Client {
-    #[tracing::instrument(skip(self))]
-    pub async fn list_feeds(&self) -> Result<Vec<Persisted<feeds::Feed>>, sqlx::Error> {
-        sqlx::query_as("SELECT * FROM feeds")
-            .fetch_all(&self.pool)
-            .await
-    }
-
-    #[tracing::instrument(skip(self))]
-    pub async fn find_feed_by_id(
-        &self,
-        id: &Id<feeds::Feed>,
-    ) -> Result<Persisted<feeds::Feed>, sqlx::Error> {
-        sqlx::query_as("SELECT * FROM feeds WHERE id = ?")
-            .bind(id)
-            .fetch_one(&self.pool)
-            .await
-    }
-}
-
-impl Client {
     #[tracing::instrument(skip_all)]
     pub async fn insert_report_group(
         &self,

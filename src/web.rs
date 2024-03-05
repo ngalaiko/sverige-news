@@ -146,7 +146,10 @@ async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> 
                     .find_translation_by_md5_hash(&en_field.value.md5_hash)
                     .await?;
                 let entry = state.db.find_entry_by_id(&field.value.entry_id).await?;
-                let feed = state.db.find_feed_by_id(&entry.value.feed_id).await?;
+                let feed = feeds::LIST
+                    .iter()
+                    .find(|f| f.id == entry.value.feed_id)
+                    .expect("feed must exist");
                 entries.push((feed, entry, en_translation.clone()));
             }
         }
@@ -223,7 +226,10 @@ async fn render_group(
                 .db
                 .find_translation_by_md5_hash(&en_field.value.md5_hash)
                 .await?;
-            let feed = state.db.find_feed_by_id(&entry.value.feed_id).await?;
+            let feed = feeds::LIST
+                .iter()
+                .find(|f| f.id == entry.value.feed_id)
+                .expect("feed must exist");
             entries.push((feed, entry, translation.clone()));
         }
     }

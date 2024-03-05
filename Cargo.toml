@@ -46,3 +46,4 @@ maud = "0.26"
 lightspeed_scheduler = { version = "0.57" }
 rust-embed = { version = "8.3", features = ["mime-guess"] }
 tower-http = { version = "0.5", features = ["compression-full", "trace"] }
+once_cell = "1.19"
