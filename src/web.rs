@@ -164,7 +164,7 @@ async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> 
     let page = maud::html! {
         header {
             h2 {
-                time datetime=(report.created_at.to_rfc3339()) { (report.created_at.format("%A, %e %B")) }
+                time datetime=(report.created_at.to_rfc3339()) { (report.created_at.with_timezone(&SWEDEN_TZ).format("%A, %e %B")) }
             }
         }
         ul {
@@ -174,7 +174,7 @@ async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> 
                         a href=(entry.value.href) { (translation.value.value) }
                     }
                     p {
-                        date time=(entry.value.published_at.to_rfc3339()) { (entry.value.published_at.format("%H:%M")) }
+                        date time=(entry.value.published_at.to_rfc3339()) { (entry.value.published_at.with_timezone(&SWEDEN_TZ).format("%H:%M")) }
                         " by "
                         (feed.value.title)
                         " and "
@@ -195,6 +195,8 @@ async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> 
 
     Ok(Page::new(&title, page))
 }
+
+const SWEDEN_TZ: chrono_tz::Tz = chrono_tz::Europe::Stockholm;
 
 async fn render_group(
     State(state): State<AppState>,
@@ -239,7 +241,7 @@ async fn render_group(
                         a href=(entry.value.href) { (translation.value.value) }
                     }
                     p {
-                        time datetime=(entry.value.published_at.to_rfc3339()) { (entry.value.published_at.format("%H:%M")) }
+                        time datetime=(entry.value.published_at.to_rfc3339()) { (entry.value.published_at.with_timezone(&SWEDEN_TZ).format("%H:%M")) }
                         " by " (feed.value.title)
                     }
                 }
