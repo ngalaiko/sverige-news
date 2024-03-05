@@ -190,6 +190,9 @@ impl Crawler {
                 if let Some(title) = entry.title {
                     fields.push((FieldName::Title, LanguageCode::SV, title.content));
                 }
+                if let Some(body) = entry.content.and_then(|c| c.body) {
+                    dbg!(body);
+                }
                 let entry = Entry {
                     feed_id: feed.id,
                     href: entry

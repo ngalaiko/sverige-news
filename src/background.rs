@@ -119,7 +119,7 @@ async fn generate_report(db: &db::Client, openai_client: &openai::Client) -> Res
         groups
             .iter()
             .flatten()
-            .map(|id| translate(db, &translator, id, feeds::LanguageCode::EN)),
+            .map(|id| translate(db, &translator, id, &feeds::LanguageCode::EN)),
     )
     .await?;
 
@@ -140,7 +140,7 @@ async fn translate(
     db: &db::Client,
     translator: &openai::Translator<'_>,
     embedding_id: &Id<clustering::Embedding>,
-    lang_code: feeds::LanguageCode,
+    lang_code: &feeds::LanguageCode,
 ) -> Result<(), Error> {
     let embedding = db.find_embedding_by_id(embedding_id).await?;
     let (translation, fields) = futures::future::try_join(
@@ -149,12 +149,32 @@ async fn translate(
     )
     .await?;
 
-    if fields
-        .iter()
-        .all(|field| field.value.lang_code == lang_code)
-    {
+    if fields.is_empty() {
         return Ok(());
     }
+
+    let translated = futures::future::try_join_all(
+        fields
+            .iter()
+            .map(|field| db.find_field_by_entry_id_lang_code(&field.value.entry_id, lang_code)),
+    )
+    .await?;
+
+    if translated.iter().all(Option::is_some) {
+        return Ok(());
+    }
+
+    let to_translate = fields
+        .iter()
+        .enumerate()
+        .filter_map(|(i, field)| {
+            if translated[i].is_none() {
+                Some(field)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
 
     let translation = translator
         .translate_sv_to_en(&translation.value.value)
@@ -162,13 +182,13 @@ async fn translate(
     let md5_hash = md5_hash::compute(&translation);
 
     futures::future::try_join(
-        futures::future::try_join_all(fields.iter().map(|_| {
+        futures::future::try_join_all(to_translate.iter().map(|_| {
             db.insert_translation(feeds::Translation {
                 md5_hash: md5_hash.clone(),
                 value: translation.clone(),
             })
         })),
-        futures::future::try_join_all(fields.iter().map(|field| {
+        futures::future::try_join_all(to_translate.iter().map(|field| {
             db.insert_field(feeds::Field {
                 md5_hash,
                 lang_code: feeds::LanguageCode::EN,
