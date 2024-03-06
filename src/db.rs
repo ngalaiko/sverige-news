@@ -67,14 +67,16 @@ impl Client {
             .await
     }
 
-    pub async fn find_field_by_entry_id_lang_code(
+    pub async fn find_field_by_entry_id_name_lang_code(
         &self,
         entry_id: &Id<feeds::Entry>,
+        name: &feeds::FieldName,
         lang_code: &feeds::LanguageCode,
     ) -> Result<Option<Persisted<feeds::Field>>, sqlx::Error> {
-        sqlx::query_as("SELECT * FROM fields WHERE entry_id = ? AND lang_code = ?")
+        sqlx::query_as("SELECT * FROM fields WHERE entry_id = ? AND lang_code = ? AND name = ?")
             .bind(entry_id)
-            .bind(lang_code.to_string())
+            .bind(lang_code)
+            .bind(name)
             .fetch_optional(&self.pool)
             .await
     }
@@ -179,9 +181,10 @@ impl Client {
     }
 
     #[tracing::instrument(skip(self))]
-    pub async fn list_translations_without_embeddings_by_lang_code_date(
+    pub async fn list_translations_without_embeddings_by_lang_code_field_name_date(
         &self,
         language_code: feeds::LanguageCode,
+        field_name: feeds::FieldName,
         date: &chrono::NaiveDate,
     ) -> Result<Vec<Persisted<feeds::Translation>>, sqlx::Error> {
         let date = date
@@ -192,6 +195,7 @@ impl Client {
                         JOIN fields
                             ON fields.md5_hash = translations.md5_hash
                             AND fields.lang_code = $2
+                            AND fields.name = $3
                         JOIN entries
                             ON entries.id = fields.entry_id
                         WHERE
@@ -200,7 +204,8 @@ impl Client {
                                 AND NOT EXISTS (SELECT 1 FROM embeddings WHERE embeddings.md5_hash = translations.md5_hash)
                         GROUP BY translations.md5_hash")
             .bind(date)
-            .bind(language_code.to_string())
+            .bind(language_code)
+            .bind(field_name)
             .fetch_all(&self.pool)
             .await
     }
@@ -246,10 +251,14 @@ impl Client {
         &self,
         report: &clustering::Report,
     ) -> Result<Persisted<clustering::Report>, sqlx::Error> {
-        sqlx::query_as("INSERT INTO reports (score) VALUES (?) RETURNING *")
-            .bind(report.score)
-            .fetch_one(&self.pool)
-            .await
+        sqlx::query_as(
+            "INSERT INTO reports (score, min_points, tolerance) VALUES (?, ?, ?) RETURNING *",
+        )
+        .bind(report.score)
+        .bind(report.min_points)
+        .bind(report.tolerance)
+        .fetch_one(&self.pool)
+        .await
     }
 
     #[tracing::instrument(skip(self))]

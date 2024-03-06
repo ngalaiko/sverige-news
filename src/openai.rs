@@ -74,7 +74,7 @@ impl Client {
         }
     }
 
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip(self))]
     pub async fn embeddings(&self, input: &str) -> Result<Vec<f32>, Error> {
         #[derive(Debug, serde::Deserialize)]
         struct ListResponse<T> {

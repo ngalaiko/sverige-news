@@ -135,8 +135,9 @@ async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> 
             for field in fields {
                 let en_field = state
                     .db
-                    .find_field_by_entry_id_lang_code(
+                    .find_field_by_entry_id_name_lang_code(
                         &field.value.entry_id,
+                        &feeds::FieldName::Title,
                         &feeds::LanguageCode::EN,
                     )
                     .await?
@@ -219,7 +220,11 @@ async fn render_group(
             let entry = state.db.find_entry_by_id(&field.value.entry_id).await?;
             let en_field = state
                 .db
-                .find_field_by_entry_id_lang_code(&field.value.entry_id, &feeds::LanguageCode::EN)
+                .find_field_by_entry_id_name_lang_code(
+                    &field.value.entry_id,
+                    &feeds::FieldName::Title,
+                    &feeds::LanguageCode::EN,
+                )
                 .await?
                 .expect("translation must exist");
             let translation = state

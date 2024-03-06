@@ -14,6 +14,8 @@ pub struct Embedding {
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Report {
+    pub min_points: u32,
+    pub tolerance: f32,
     pub score: f32,
 }
 
@@ -23,11 +25,12 @@ pub struct ReportGroup {
     pub embedding_ids: Vec<Id<Embedding>>,
 }
 
+static MIN_POINTS: usize = 3;
+static RANGE: std::ops::RangeInclusive<f32> = 0.75..=1.1;
+
 pub async fn group_embeddings(
     embeddings: &[Persisted<Embedding>],
-    min_points: usize,
-    range: std::ops::RangeInclusive<f32>,
-) -> (Vec<Vec<Id<Embedding>>>, f32) {
+) -> (Vec<Vec<Id<Embedding>>>, (usize, f32), f32) {
     let shape = (embeddings.len(), embeddings[0].value.size as usize);
     // try to reducing dimentions
     let vectors = embeddings
@@ -36,26 +39,29 @@ pub async fn group_embeddings(
         .collect::<Vec<_>>();
     let vectors: Array2<f32> = Array2::from_shape_vec(shape, vectors).expect("invalid shape");
 
-    let mut range = range;
+    let mut range = RANGE.clone();
     let mut best_result = (Vec::new(), -1.0);
+    let mut final_tolerance = 0.0;
 
     let (mut left_result, mut right_result) = futures::join!(
-        group_vectors(&vectors, min_points, *range.start()),
-        group_vectors(&vectors, min_points, *range.end()),
+        dbscan(&vectors, MIN_POINTS, *range.start()),
+        dbscan(&vectors, MIN_POINTS, *range.end()),
     );
 
     loop {
-        if left_result.1 > best_result.1 {
+        if !is_overfitted(&left_result) && left_result.1 > best_result.1 {
             best_result = left_result.clone();
-        } else if right_result.1 > best_result.1 {
+            final_tolerance = *range.start();
+        } else if !is_overfitted(&right_result) && right_result.1 > best_result.1 {
             best_result = right_result.clone();
+            final_tolerance = *range.end();
         } else {
             // result is not improving, stop
             break;
         }
 
         let center = (*range.start() + *range.end()) / 2.0;
-        let center_result = group_vectors(&vectors, min_points, center).await;
+        let center_result = dbscan(&vectors, MIN_POINTS, center).await;
 
         if left_result.1 > right_result.1 {
             range = *range.start()..=center;
@@ -80,11 +86,15 @@ pub async fn group_embeddings(
         })
         .collect::<Vec<_>>();
 
-    (clusters, score)
+    (clusters, (MIN_POINTS, final_tolerance), score)
+}
+
+fn is_overfitted((clusters, score): &(Vec<Vec<usize>>, f32)) -> bool {
+    1.0.eq(score) || clusters.len() == 1
 }
 
 #[tracing::instrument(skip(vectors), fields(dim = ?vectors.dim()))]
-async fn group_vectors(
+async fn dbscan(
     vectors: &Array2<f32>,
     min_points: usize,
     tolerance: f32,
