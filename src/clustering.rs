@@ -49,10 +49,10 @@ pub async fn group_embeddings(
     );
 
     loop {
-        if !is_overfitted(&left_result) && left_result.1 > best_result.1 {
+        if left_result.1 > best_result.1 {
             best_result = left_result.clone();
             final_tolerance = *range.start();
-        } else if !is_overfitted(&right_result) && right_result.1 > best_result.1 {
+        } else if right_result.1 > best_result.1 {
             best_result = right_result.clone();
             final_tolerance = *range.end();
         } else {
@@ -87,10 +87,6 @@ pub async fn group_embeddings(
         .collect::<Vec<_>>();
 
     (clusters, (MIN_POINTS, final_tolerance), score)
-}
-
-fn is_overfitted((clusters, score): &(Vec<Vec<usize>>, f32)) -> bool {
-    1.0.eq(score) || clusters.len() == 1
 }
 
 #[tracing::instrument(skip(vectors), fields(dim = ?vectors.dim()))]
