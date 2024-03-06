@@ -50,6 +50,7 @@ async fn crawl(db: &db::Client) -> Result<(), Error> {
     let (
         abc_entries,
         dagen_entries,
+        aftonbladet_entries,
         dn_entries,
         expressen_entries,
         nkpg_entries,
@@ -59,6 +60,7 @@ async fn crawl(db: &db::Client) -> Result<(), Error> {
         tv4_entries,
     ) = futures::try_join!(
         feeds::abc::crawl(&http_client),
+        feeds::aftonbladet::crawl(&http_client),
         feeds::dagen::crawl(&http_client),
         feeds::dn::crawl(&http_client),
         feeds::expressen::crawl(&http_client),
@@ -72,6 +74,7 @@ async fn crawl(db: &db::Client) -> Result<(), Error> {
     let entries = []
         .into_iter()
         .chain(abc_entries.into_iter())
+        .chain(aftonbladet_entries.into_iter())
         .chain(dagen_entries.into_iter())
         .chain(dn_entries.into_iter())
         .chain(expressen_entries.into_iter())

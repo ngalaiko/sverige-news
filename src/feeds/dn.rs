@@ -19,6 +19,28 @@ pub static FEED: once_cell::sync::Lazy<Persisted<feeds::Feed>> = once_cell::sync
     }
 });
 
+pub async fn crawl(
+    http_client: &reqwest::Client,
+) -> Result<
+    Vec<(
+        feeds::Entry,
+        Vec<(feeds::FieldName, feeds::LanguageCode, String)>,
+    )>,
+    Box<dyn std::error::Error + 'static + Send + Sync>,
+> {
+    let response = http_client.get("https://www.dn.se/direkt/").send().await?;
+    let bytes = response.bytes().await?;
+    let body = std::str::from_utf8(&bytes)?;
+
+    let doc = Document::from(body);
+    let entries = doc
+        .find(Name("article").and(Class("direkt-post")))
+        .map(parse_entry)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(entries)
+}
+
 #[derive(Debug, thiserror::Error)]
 enum ParseError {
     #[error("no link ")]
@@ -88,26 +110,4 @@ fn parse_entry(
             .ok_or(ParseError::NoPublishDate)?,
     };
     Ok((entry, fields))
-}
-
-pub async fn crawl(
-    http_client: &reqwest::Client,
-) -> Result<
-    Vec<(
-        feeds::Entry,
-        Vec<(feeds::FieldName, feeds::LanguageCode, String)>,
-    )>,
-    Box<dyn std::error::Error + 'static + Send + Sync>,
-> {
-    let response = http_client.get("https://www.dn.se/direkt/").send().await?;
-    let bytes = response.bytes().await?;
-    let body = std::str::from_utf8(&bytes)?;
-
-    let doc = Document::from(body);
-    let entries = doc
-        .find(Name("article").and(Class("direkt-post")))
-        .map(parse_entry)
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok(entries)
 }

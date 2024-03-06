@@ -1,4 +1,5 @@
 pub mod abc;
+pub mod aftonbladet;
 pub mod dagen;
 pub mod dn;
 pub mod expressen;
@@ -166,16 +167,7 @@ pub static LIST: once_cell::sync::Lazy<Vec<Persisted<Feed>>> = once_cell::sync::
         abc::FEED.clone(),
         dagen::FEED.clone(),
         svd::FEED.clone(),
-        // Persisted {
-        //     id: Id::from(4),
-        //     created_at,
-        //     value: Feed {
-        //         title: "Aftonbladet".to_string(),
-        //         href: "https://rss.aftonbladet.se/rss2/small/pages/sections/senastenytt/"
-        //             .parse()
-        //             .expect("valid url"),
-        //     },
-        // },
+        aftonbladet::FEED.clone(),
         // Persisted {
         //     id: Id::from(8),
         //     created_at,
