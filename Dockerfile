@@ -12,4 +12,4 @@ FROM alpine:3.19
 COPY --from=builder /build/ /
 ENTRYPOINT ["/sverige-news"]
 EXPOSE 8080
-CMD ["--address", "0.0.0.0:8080", "--database-file", "/data/sverige-news.db"]
+CMD ["--address", "0.0.0.0:8080", "--database-file", "/data/database.sqlite3"]
