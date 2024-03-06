@@ -28,6 +28,10 @@ pub struct ReportGroup {
 static MIN_POINTS: usize = 3;
 static RANGE: std::ops::RangeInclusive<f32> = 0.75..=1.1;
 
+fn cmp_results(a: &(Vec<Vec<usize>>, f32), b: &(Vec<Vec<usize>>, f32)) -> std::cmp::Ordering {
+    a.0.len().cmp(&b.0.len())
+}
+
 pub async fn group_embeddings(
     embeddings: &[Persisted<Embedding>],
 ) -> (Vec<Vec<Id<Embedding>>>, (usize, f32), f32) {
@@ -49,30 +53,35 @@ pub async fn group_embeddings(
     );
 
     loop {
-        if left_result.1 > best_result.1 {
-            best_result = left_result.clone();
-            final_tolerance = *range.start();
-        } else if right_result.1 > best_result.1 {
-            best_result = right_result.clone();
-            final_tolerance = *range.end();
-        } else {
-            // result is not improving, stop
-            break;
+        match cmp_results(&left_result, &right_result) {
+            std::cmp::Ordering::Greater => {
+                best_result = left_result.clone();
+                final_tolerance = *range.start();
+            }
+            std::cmp::Ordering::Less => {
+                best_result = right_result.clone();
+                final_tolerance = *range.end();
+            }
+            _ => {
+                // result is not improving, stop
+                break;
+            }
         }
 
         let center = (*range.start() + *range.end()) / 2.0;
         let center_result = dbscan(&vectors, MIN_POINTS, center).await;
 
-        if left_result.1 > right_result.1 {
-            range = *range.start()..=center;
-            right_result = center_result;
-        } else if right_result.1 > left_result.1 {
-            range = center..=*range.end();
-            left_result = center_result;
-        } else {
-            // ranges are equal, break
-            break;
-        };
+        match cmp_results(&left_result, &right_result) {
+            std::cmp::Ordering::Greater => {
+                range = *range.start()..=center;
+                right_result = center_result;
+            }
+            std::cmp::Ordering::Less => {
+                range = center..=*range.end();
+                left_result = center_result;
+            }
+            _ => break,
+        }
     }
 
     let (clusters, score) = best_result;
