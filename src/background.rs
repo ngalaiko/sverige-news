@@ -170,8 +170,14 @@ async fn generate_report(db: &db::Client, openai_client: &openai::Client) -> Res
             score,
             tolerance,
             min_points: min_points.try_into().expect("usize -> u32 failed"),
+            rows: today_title_embeddings
+                .len()
+                .try_into()
+                .expect("usize -> u32 failed"),
+            dimentions: today_title_embeddings[0].value.size,
         })
         .await?;
+
     futures::future::try_join_all(groups.into_iter().map(|embedding_ids| {
         db.insert_report_group(clustering::ReportGroup {
             report_id: report.id,

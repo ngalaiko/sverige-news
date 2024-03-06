@@ -17,6 +17,8 @@ pub struct Report {
     pub min_points: u32,
     pub tolerance: f32,
     pub score: f32,
+    pub rows: u32,
+    pub dimentions: u32,
 }
 
 #[derive(Debug, Clone)]

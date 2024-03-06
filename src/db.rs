@@ -252,11 +252,13 @@ impl Client {
         report: &clustering::Report,
     ) -> Result<Persisted<clustering::Report>, sqlx::Error> {
         sqlx::query_as(
-            "INSERT INTO reports (score, min_points, tolerance) VALUES (?, ?, ?) RETURNING *",
+            "INSERT INTO reports (score, min_points, tolerance, rows, dimentions) VALUES (?, ?, ?, ?, ?) RETURNING *",
         )
         .bind(report.score)
         .bind(report.min_points)
         .bind(report.tolerance)
+        .bind(report.rows)
+        .bind(report.dimentions)
         .fetch_one(&self.pool)
         .await
     }
