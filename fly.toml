@@ -1,9 +1,7 @@
 app = 'sverige-news'
 primary_region = 'arn'
 
-[build]
-
-[[mounts]]
+[mounts]
 source = 'data'
 destination = '/data'
 
