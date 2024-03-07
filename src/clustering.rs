@@ -1,3 +1,4 @@
+use futures::FutureExt;
 use linfa::{metrics::SilhouetteScore, traits::Transformer, DatasetBase};
 use linfa_clustering::Dbscan;
 use linfa_nn::{distance, CommonNearestNeighbour};
@@ -29,11 +30,7 @@ pub struct ReportGroup {
 
 static MIN_POINTS: usize = 3;
 static RANGE: std::ops::RangeInclusive<f32> = 0.7..=1.2;
-
-fn cmp_results(a: &(Vec<Vec<usize>>, f32), b: &(Vec<Vec<usize>>, f32)) -> std::cmp::Ordering {
-    // Prefer more clusters
-    a.0.len().cmp(&b.0.len())
-}
+static SAMPLES: usize = 100;
 
 pub async fn group_embeddings(
     embeddings: &[Persisted<Embedding>],
@@ -45,46 +42,43 @@ pub async fn group_embeddings(
         .collect::<Vec<_>>();
     let vectors: Array2<f32> = Array2::from_shape_vec(shape, vectors).expect("invalid shape");
 
-    let (left_result, right_result) = futures::join!(
-        dbscan(&vectors, MIN_POINTS, *RANGE.start()),
-        dbscan(&vectors, MIN_POINTS, *RANGE.end()),
-    );
+    let step = (RANGE.end() - RANGE.start()) / SAMPLES as f32;
+    let samples = futures::future::join_all(
+        (0..SAMPLES)
+            .map(|i| {
+                let tolerance = RANGE.start() + step * i as f32;
+                dbscan(&vectors, MIN_POINTS, tolerance)
+                    .then(move |(clusters, score)| async move {
+                        tracing::info!(tolerance = tolerance, score = ?score, clusters_len = clusters.len(), "sample");
+                        (clusters, score, tolerance) })
+            })
+            .collect::<Vec<_>>(),
+    )
+    .await;
 
-    let mut best_result = if cmp_results(&left_result, &right_result) == std::cmp::Ordering::Greater
-    {
-        left_result.clone()
-    } else {
-        right_result.clone()
-    };
+    let (clusters, score, tolerance) = samples
+        .into_iter()
+        .filter(|(_, score, _)| 0.0 < *score && *score < 1.0)
+        .filter(|(clusters, _, _)| clusters.len() > 1)
+        .max_by(|a, b| {
+            // choose the best combination of clusters len and score
+            let a = a.0.len() as f32 * a.1;
+            let b = b.0.len() as f32 * b.1;
+            a.partial_cmp(&b).expect("NaN")
+        })
+        .expect("no results");
 
-    let mut range = RANGE.clone();
-    loop {
-        let mid = range.start() + (range.end() - range.start()) / 2.0;
-        let mid_result = dbscan(&vectors, MIN_POINTS, mid).await;
+    let clusters = clusters
+        .into_iter()
+        .map(|cluster| {
+            cluster
+                .into_iter()
+                .map(|i| embeddings[i].id)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
 
-        match cmp_results(&mid_result, &best_result) {
-            std::cmp::Ordering::Greater => {
-                best_result = mid_result;
-                range = mid..=*range.end();
-            }
-            std::cmp::Ordering::Less => {
-                range = *range.start()..=mid;
-            }
-            std::cmp::Ordering::Equal => {
-                let (clusters, score) = best_result;
-                let clusters = clusters
-                    .into_iter()
-                    .map(|cluster| {
-                        cluster
-                            .into_iter()
-                            .map(|i| embeddings[i].id)
-                            .collect::<Vec<_>>()
-                    })
-                    .collect::<Vec<_>>();
-                return (clusters, (MIN_POINTS, *range.end()), score);
-            }
-        }
-    }
+    (clusters, (MIN_POINTS, tolerance), score)
 }
 
 async fn dbscan(
