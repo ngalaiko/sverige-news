@@ -64,7 +64,7 @@ impl axum::response::IntoResponse for Page {
             head {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
-                link rel="stylesheet" href="/index.css";
+                link rel="stylesheet" href="/css/pico.classless.yellow.min.css";
                 title { (self.title) }
             }
             body {
@@ -182,15 +182,13 @@ async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> 
     let page = maud::html! {
         header {
             h2 {
-                time datetime=(report.created_at.to_rfc3339()) { (report.created_at.with_timezone(&SWEDEN_TZ).format("%A, %e %B")) }
+                time datetime=(report.created_at.to_rfc3339()) { (report.created_at.with_timezone(&SWEDEN_TZ).format("%A in Sweden")) }
             }
         }
-        ul {
+        ol {
             @for (group_id, (feed, entry, translation), entries_len, _) in gg {
                 li {
-                    h3 {
-                        a href=(entry.value.href) { (translation.value.value) }
-                    }
+                    a href=(entry.value.href) { (translation.value.value) }
                     p {
                         date time=(entry.value.published_at.to_rfc3339()) { (entry.value.published_at.with_timezone(&SWEDEN_TZ).format("%H:%M")) }
                         " by "
@@ -257,17 +255,20 @@ async fn render_group(
 
     let page = maud::html! {
         header {
-            a href="/" { "← Back to main page" }
+            nav {
+                ul {
+                    li { small { a href= "/" { "Back to main page" } } }
+                }
+            }
         }
-        ul {
+        ol {
             @for (feed, entry, translation) in &entries {
                 li {
-                    h3 {
-                        a href=(entry.value.href) { (translation.value.value) }
-                    }
+                    a href=(entry.value.href) { (translation.value.value) }
                     p {
                         time datetime=(entry.value.published_at.to_rfc3339()) { (entry.value.published_at.with_timezone(&SWEDEN_TZ).format("%H:%M")) }
-                        " by " (feed.value.title)
+                        " by "
+                        (feed.value.title)
                     }
                 }
             }
