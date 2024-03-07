@@ -28,7 +28,7 @@ pub struct ReportGroup {
 }
 
 static MIN_POINTS: usize = 3;
-static RANGE: std::ops::RangeInclusive<f32> = 0.5..=1.5;
+static RANGE: std::ops::RangeInclusive<f32> = 0.7..=1.2;
 
 fn cmp_results(a: &(Vec<Vec<usize>>, f32), b: &(Vec<Vec<usize>>, f32)) -> std::cmp::Ordering {
     // Prefer more clusters
@@ -50,12 +50,12 @@ pub async fn group_embeddings(
         dbscan(&vectors, MIN_POINTS, *RANGE.end()),
     );
 
-    let (mut best_result, mut tolerance) =
-        if cmp_results(&left_result, &right_result) == std::cmp::Ordering::Greater {
-            (left_result.clone(), *RANGE.start())
-        } else {
-            (right_result.clone(), *RANGE.end())
-        };
+    let mut best_result = if cmp_results(&left_result, &right_result) == std::cmp::Ordering::Greater
+    {
+        left_result.clone()
+    } else {
+        right_result.clone()
+    };
 
     let mut range = RANGE.clone();
     loop {
@@ -65,30 +65,26 @@ pub async fn group_embeddings(
         match cmp_results(&mid_result, &best_result) {
             std::cmp::Ordering::Greater => {
                 best_result = mid_result;
-                tolerance = mid;
-                range = tolerance..=mid;
+                range = mid..=*range.end();
             }
             std::cmp::Ordering::Less => {
-                range = mid..=tolerance;
+                range = *range.start()..=mid;
             }
             std::cmp::Ordering::Equal => {
-                // found the best result
-                break;
+                let (clusters, score) = best_result;
+                let clusters = clusters
+                    .into_iter()
+                    .map(|cluster| {
+                        cluster
+                            .into_iter()
+                            .map(|i| embeddings[i].id)
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>();
+                return (clusters, (MIN_POINTS, *range.end()), score);
             }
         }
     }
-
-    let (clusters, score) = best_result;
-    let clusters = clusters
-        .into_iter()
-        .map(|cluster| {
-            cluster
-                .into_iter()
-                .map(|i| embeddings[i].id)
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-    return (clusters, (MIN_POINTS, tolerance), score);
 }
 
 async fn dbscan(

@@ -1,4 +1,4 @@
-use crate::{clustering, db, feeds, id::Id, md5_hash, openai};
+use crate::{clustering, db, feeds, id::Id, md5_hash, normalizer::normalize_sv, openai};
 
 pub async fn run(
     db: db::Client,
@@ -125,7 +125,8 @@ async fn generate_embeddings(db: &db::Client, openai_client: &openai::Client) ->
         .await?;
 
     for translation in translations_without_embeddings {
-        let embedding = openai_client.embeddings(&translation.value.value).await?;
+        let text = normalize_sv(&translation.value.value);
+        let embedding = openai_client.embeddings(&text).await?;
 
         db.insert_embeddig(&clustering::Embedding {
             md5_hash: translation.value.md5_hash,

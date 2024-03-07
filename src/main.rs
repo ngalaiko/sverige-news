@@ -4,6 +4,7 @@ mod db;
 mod feeds;
 mod id;
 mod md5_hash;
+mod normalizer;
 mod openai;
 mod persisted;
 mod url;
