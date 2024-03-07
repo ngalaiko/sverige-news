@@ -30,7 +30,7 @@ pub struct ReportGroup {
 
 static MIN_POINTS: usize = 3;
 static RANGE: std::ops::RangeInclusive<f32> = 0.7..=1.2;
-static SAMPLES: usize = 100;
+static SAMPLES: usize = 50;
 
 pub async fn group_embeddings(
     embeddings: &[Persisted<Embedding>],
