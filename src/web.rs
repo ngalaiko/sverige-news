@@ -160,10 +160,24 @@ async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> 
             .min_by_key(|(_, entry, _)| entry.value.published_at)
             .expect("group is not empty");
 
-        gg.push((group.id, earliest_entry.clone(), entries.len()));
+        // score is the sum of the minutes since the start of the day of each entry
+        let score: i64 = entries
+            .iter()
+            .map(|(_, e, _)| e.value.published_at.naive_utc())
+            .map(|dt| {
+                let start_of_day = dt
+                    .date()
+                    .and_hms_opt(0, 0, 0)
+                    .expect("failed to get start of day");
+                dt - start_of_day
+            })
+            .map(|delta| delta.num_minutes())
+            .sum();
+
+        gg.push((group.id, earliest_entry.clone(), entries.len(), score));
     }
 
-    gg.sort_by(|a, b| b.2.cmp(&a.2));
+    gg.sort_by(|a, b| b.3.cmp(&a.3));
 
     let page = maud::html! {
         header {
@@ -172,7 +186,7 @@ async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> 
             }
         }
         ul {
-            @for (group_id, (feed, entry, translation), count) in gg {
+            @for (group_id, (feed, entry, translation), entries_len, _) in gg {
                 li {
                     h3 {
                         a href=(entry.value.href) { (translation.value.value) }
@@ -183,10 +197,10 @@ async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> 
                         (feed.value.title)
                         " and "
                         a href=(format!("/groups/{}", group_id)) {
-                            @if count == 2 {
+                            @if entries_len == 2 {
                                 "1 other"
                             } @else {
-                                (count - 1) " others"
+                                (entries_len - 1) " others"
                             }
                         }
                     }
