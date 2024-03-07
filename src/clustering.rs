@@ -28,9 +28,10 @@ pub struct ReportGroup {
 }
 
 static MIN_POINTS: usize = 3;
-static RANGE: std::ops::RangeInclusive<f32> = 0.75..=1.1;
+static RANGE: std::ops::RangeInclusive<f32> = 0.5..=1.5;
 
 fn cmp_results(a: &(Vec<Vec<usize>>, f32), b: &(Vec<Vec<usize>>, f32)) -> std::cmp::Ordering {
+    // Prefer more clusters
     a.0.len().cmp(&b.0.len())
 }
 
@@ -38,51 +39,42 @@ pub async fn group_embeddings(
     embeddings: &[Persisted<Embedding>],
 ) -> (Vec<Vec<Id<Embedding>>>, (usize, f32), f32) {
     let shape = (embeddings.len(), embeddings[0].value.size as usize);
-    // try to reducing dimentions
     let vectors = embeddings
         .iter()
         .flat_map(|embedding| embedding.value.value.iter().copied())
         .collect::<Vec<_>>();
     let vectors: Array2<f32> = Array2::from_shape_vec(shape, vectors).expect("invalid shape");
 
-    let mut range = RANGE.clone();
-    let mut best_result = (Vec::new(), -1.0);
-    let mut final_tolerance = 0.0;
-
-    let (mut left_result, mut right_result) = futures::join!(
-        dbscan(&vectors, MIN_POINTS, *range.start()),
-        dbscan(&vectors, MIN_POINTS, *range.end()),
+    let (left_result, right_result) = futures::join!(
+        dbscan(&vectors, MIN_POINTS, *RANGE.start()),
+        dbscan(&vectors, MIN_POINTS, *RANGE.end()),
     );
 
+    let (mut best_result, mut tolerance) =
+        if cmp_results(&left_result, &right_result) == std::cmp::Ordering::Greater {
+            (left_result.clone(), *RANGE.start())
+        } else {
+            (right_result.clone(), *RANGE.end())
+        };
+
+    let mut range = RANGE.clone();
     loop {
-        match cmp_results(&left_result, &right_result) {
+        let mid = range.start() + (range.end() - range.start()) / 2.0;
+        let mid_result = dbscan(&vectors, MIN_POINTS, mid).await;
+
+        match cmp_results(&mid_result, &best_result) {
             std::cmp::Ordering::Greater => {
-                best_result = left_result.clone();
-                final_tolerance = *range.start();
+                best_result = mid_result;
+                tolerance = mid;
+                range = tolerance..=mid;
             }
             std::cmp::Ordering::Less => {
-                best_result = right_result.clone();
-                final_tolerance = *range.end();
+                range = mid..=tolerance;
             }
-            _ => {
-                // result is not improving, stop
+            std::cmp::Ordering::Equal => {
+                // found the best result
                 break;
             }
-        }
-
-        let center = (*range.start() + *range.end()) / 2.0;
-        let center_result = dbscan(&vectors, MIN_POINTS, center).await;
-
-        match cmp_results(&left_result, &right_result) {
-            std::cmp::Ordering::Greater => {
-                range = *range.start()..=center;
-                right_result = center_result;
-            }
-            std::cmp::Ordering::Less => {
-                range = center..=*range.end();
-                left_result = center_result;
-            }
-            _ => break,
         }
     }
 
@@ -96,11 +88,9 @@ pub async fn group_embeddings(
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-
-    (clusters, (MIN_POINTS, final_tolerance), score)
+    return (clusters, (MIN_POINTS, tolerance), score);
 }
 
-#[tracing::instrument(skip(vectors), fields(dim = ?vectors.dim()))]
 async fn dbscan(
     vectors: &Array2<f32>,
     min_points: usize,
@@ -140,7 +130,12 @@ async fn dbscan(
             .cloned()
             .collect::<Vec<_>>();
 
-        tracing::info!(score = ?silhouette_score, clusters_len = clustered_indices.len());
+        tracing::info!(
+            min_points = min_points,
+            tolerance = tolerance,
+            score = ?silhouette_score, clusters_len = clustered_indices.len(),
+            "dbscan"
+        );
 
         let _ = send.send((clustered_indices, silhouette_score));
     });
