@@ -1,4 +1,3 @@
-use futures::FutureExt;
 use linfa::{metrics::SilhouetteScore, traits::Transformer, DatasetBase};
 use linfa_clustering::Dbscan;
 use linfa_nn::{distance, CommonNearestNeighbour};
@@ -32,6 +31,7 @@ static MIN_POINTS: usize = 3;
 static RANGE: std::ops::RangeInclusive<f32> = 0.7..=1.2;
 static SAMPLES: usize = 50;
 
+#[tracing::instrument(skip(embeddings))]
 pub async fn group_embeddings(
     embeddings: &[Persisted<Embedding>],
 ) -> (Vec<Vec<Id<Embedding>>>, (usize, f32), f32) {
@@ -43,32 +43,26 @@ pub async fn group_embeddings(
     let vectors: Array2<f32> = Array2::from_shape_vec(shape, vectors).expect("invalid shape");
 
     let step = (RANGE.end() - RANGE.start()) / SAMPLES as f32;
-    let samples = futures::future::join_all(
-        (0..SAMPLES)
-            .map(|i| {
-                let tolerance = RANGE.start() + step * i as f32;
-                dbscan(&vectors, MIN_POINTS, tolerance)
-                    .then(move |(clusters, score)| async move {
-                        tracing::info!(tolerance = tolerance, score = ?score, clusters_len = clusters.len(), "sample");
-                        (clusters, score, tolerance) })
-            })
-            .collect::<Vec<_>>(),
-    )
-    .await;
+    let (mut best_clusters, mut best_tolerance, mut best_score) = (vec![], 0.0, 0.0);
+    for i in 0..SAMPLES {
+        let tolerance = RANGE.start() + step * i as f32;
+        let (clusters, score) = dbscan(&vectors, MIN_POINTS, tolerance).await;
+        tracing::info!(tolerance = tolerance, score = ?score, clusters_len = clusters.len(), "sample");
+        if clusters.len() as f32 * score > best_clusters.len() as f32 * best_score {
+            best_clusters = clusters;
+            best_tolerance = tolerance;
+            best_score = score;
+        }
+    }
 
-    let (clusters, score, tolerance) = samples
-        .into_iter()
-        .filter(|(_, score, _)| 0.0 < *score && *score < 1.0)
-        .filter(|(clusters, _, _)| clusters.len() > 1)
-        .max_by(|a, b| {
-            // choose the best combination of clusters len and score
-            let a = a.0.len() as f32 * a.1;
-            let b = b.0.len() as f32 * b.1;
-            a.partial_cmp(&b).expect("NaN")
-        })
-        .expect("no results");
+    tracing::info!(
+        tolerance = best_tolerance,
+        score = best_score,
+        clusters_len = best_clusters.len(),
+        "best"
+    );
 
-    let clusters = clusters
+    let clusters = best_clusters
         .into_iter()
         .map(|cluster| {
             cluster
@@ -78,7 +72,7 @@ pub async fn group_embeddings(
         })
         .collect::<Vec<_>>();
 
-    (clusters, (MIN_POINTS, tolerance), score)
+    (clusters, (MIN_POINTS, best_tolerance), best_score)
 }
 
 async fn dbscan(
