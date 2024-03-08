@@ -1,11 +1,38 @@
+use std::collections::HashSet;
+
+use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
+use reqwest_retry::{
+    policies::ExponentialBackoff, RetryTransientMiddleware, Retryable, RetryableStrategy,
+};
+use reqwest_tracing::TracingMiddleware;
+
 #[derive(Clone)]
 pub struct Client {
     base_url: url::Url,
-    http_client: reqwest::Client,
+    http_client: ClientWithMiddleware,
+}
+
+struct RetryStatusCodes(HashSet<reqwest::StatusCode>);
+
+impl RetryStatusCodes {
+    fn new(status_codes: Vec<reqwest::StatusCode>) -> Self {
+        Self(status_codes.into_iter().collect())
+    }
+}
+
+impl RetryableStrategy for RetryStatusCodes {
+    fn handle(&self, res: &reqwest_middleware::Result<reqwest::Response>) -> Option<Retryable> {
+        match res {
+            Ok(response) if self.0.contains(&response.status()) => Some(Retryable::Transient),
+            Ok(_) => None,
+            Err(error) => reqwest_retry::default_on_request_failure(error),
+        }
+    }
 }
 
 impl Client {
     pub fn new(base_url: &url::Url, token: &str) -> Self {
+        let retry_policy = ExponentialBackoff::builder().build_with_max_retries(3);
         let http_client = {
             let mut headers = reqwest::header::HeaderMap::new();
             headers.insert(
@@ -13,10 +40,17 @@ impl Client {
                 reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
                     .expect("invalid authorization header value"),
             );
-            reqwest::ClientBuilder::new()
+            let client = reqwest::ClientBuilder::new()
                 .default_headers(headers)
                 .build()
-                .expect("failed to build reqwest client")
+                .expect("failed to build reqwest client");
+            ClientBuilder::new(client)
+                .with(RetryTransientMiddleware::new_with_policy_and_strategy(
+                    retry_policy,
+                    RetryStatusCodes::new(vec![reqwest::StatusCode::SERVICE_UNAVAILABLE]),
+                ))
+                .with(TracingMiddleware::default())
+                .build()
         };
         Self {
             base_url: base_url.clone(),
@@ -24,7 +58,11 @@ impl Client {
         }
     }
 
-    pub async fn comptetions(&self, task: &str, input: &str) -> Result<String, Error> {
+    pub async fn comptetions(
+        &self,
+        task: &str,
+        input: &str,
+    ) -> Result<String, Box<dyn std::error::Error + 'static + Send + Sync>> {
         #[derive(Debug, serde::Deserialize)]
         struct ChatCompletionMessage {
             content: String,
@@ -57,25 +95,25 @@ impl Client {
             .http_client
             .post(endpoint)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(serde_json::to_string(&body).map_err(Error::Ser)?)
+            .body(serde_json::to_string(&body)?)
             .send()
-            .await
-            .map_err(Error::Reqwest)?;
+            .await?;
 
-        let response_bytes = response.bytes().await.map_err(Error::Reqwest)?;
+        let response_bytes = response.bytes().await?;
 
-        let response = serde_json::from_slice::<Response<ChatCompletionResponse>>(&response_bytes)
-            .map_err(Error::De);
-
+        let response = serde_json::from_slice::<Response<ChatCompletionResponse>>(&response_bytes);
         match response {
             Ok(Response::Ok(completion)) => Ok(completion.choices[0].message.content.clone()),
-            Ok(Response::Error { error }) => Err(Error::Api(error)),
-            Err(e) => Err(e),
+            Ok(Response::Error { error }) => Err(error.into()),
+            Err(error) => Err(error.into()),
         }
     }
 
     #[tracing::instrument(skip(self))]
-    pub async fn embeddings(&self, input: &str) -> Result<Vec<f32>, Error> {
+    pub async fn embeddings(
+        &self,
+        input: &str,
+    ) -> Result<Vec<f32>, Box<dyn std::error::Error + 'static + Send + Sync>> {
         #[derive(Debug, serde::Deserialize)]
         struct ListResponse<T> {
             data: Vec<T>,
@@ -96,35 +134,21 @@ impl Client {
             .http_client
             .post(endpoint)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(serde_json::to_string(&body).map_err(Error::Ser)?)
+            .body(serde_json::to_string(&body)?)
             .send()
-            .await
-            .map_err(Error::Reqwest)?;
+            .await?;
 
-        let response_bytes = response.bytes().await.map_err(Error::Reqwest)?;
+        let response_bytes = response.bytes().await?;
 
         let response =
-            serde_json::from_slice::<Response<ListResponse<EmbeddingResponse>>>(&response_bytes)
-                .map_err(Error::De);
+            serde_json::from_slice::<Response<ListResponse<EmbeddingResponse>>>(&response_bytes);
 
         match response {
             Ok(Response::Ok(list)) => Ok(list.data[0].embedding.clone()),
-            Ok(Response::Error { error }) => Err(Error::Api(error)),
-            Err(e) => Err(e),
+            Ok(Response::Error { error }) => Err(error.into()),
+            Err(error) => Err(error.into()),
         }
     }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error(transparent)]
-    Reqwest(reqwest::Error),
-    #[error(transparent)]
-    Ser(serde_json::Error),
-    #[error(transparent)]
-    De(serde_json::Error),
-    #[error(transparent)]
-    Api(ErrorResponse),
 }
 
 #[derive(Debug, serde::Deserialize, thiserror::Error)]
@@ -150,7 +174,10 @@ impl<'a> Translator<'a> {
     }
 
     #[tracing::instrument(skip(self))]
-    pub async fn translate_sv_to_en(&self, value: &str) -> Result<String, Error> {
+    pub async fn translate_sv_to_en(
+        &self,
+        value: &str,
+    ) -> Result<String, Box<dyn std::error::Error + 'static + Send + Sync>> {
         let task = "You are a highly skilled and concise professional translator. When you receive a sentence in Swedish, your task is to translate it into English. VERY IMPORTANT: Do not output any notes, explanations, alternatives or comments after or before the translation.";
         self.client.comptetions(task, value).await
     }
