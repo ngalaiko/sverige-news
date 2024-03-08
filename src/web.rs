@@ -120,85 +120,80 @@ struct GroupParams {
 }
 
 async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> {
-    let report = state.db.find_latest_report().await?;
-    let groups = state.db.list_groups_by_report_id(&report.id).await?;
+    let entries = state
+        .db
+        .list_latest_report_group_entries_by_lang_code(&feeds::LanguageCode::EN)
+        .await?;
 
-    let mut gg = vec![];
-    for group in groups {
-        let mut entries = vec![];
-        for embedding_id in &group.value.embedding_ids {
-            let embedding = state.db.find_embedding_by_id(embedding_id).await?;
-            let fields = state
-                .db
-                .list_fields_by_md5_hash(&embedding.value.md5_hash)
-                .await?;
-            for field in fields {
-                let en_field = state
-                    .db
-                    .find_field_by_entry_id_name_lang_code(
-                        &field.value.entry_id,
-                        &feeds::FieldName::Title,
-                        &feeds::LanguageCode::EN,
-                    )
-                    .await?
-                    .expect("translation must exist");
-                let en_translation = state
-                    .db
-                    .find_translation_by_md5_hash(&en_field.value.md5_hash)
-                    .await?;
-                let entry = state.db.find_entry_by_id(&field.value.entry_id).await?;
-                let feed = feeds::LIST
-                    .iter()
-                    .find(|f| f.id == entry.value.feed_id)
-                    .expect("feed must exist");
-                entries.push((feed, entry, en_translation.clone()));
-            }
-        }
+    let entries_feed_titles = entries
+        .iter()
+        .map(|entry| {
+            let feed = feeds::LIST
+                .iter()
+                .find(|f| f.id == entry.feed_id)
+                .expect("feed must exist");
+            (entry, feed.value.title.clone())
+        })
+        .collect::<Vec<_>>();
 
-        let earliest_entry = entries
-            .iter()
-            .min_by_key(|(_, entry, _)| entry.value.published_at)
-            .expect("group is not empty");
+    let entries_by_group_id = entries_feed_titles.into_iter().fold(
+        std::collections::BTreeMap::new(),
+        |mut map, entry| {
+            map.entry(entry.0.group_id)
+                .or_insert_with(Vec::new)
+                .push(entry);
+            map
+        },
+    );
 
-        // score is the sum of the minutes since the start of the day of each entry
-        let score: i64 = entries
-            .iter()
-            .map(|(_, e, _)| e.value.published_at.naive_utc())
-            .map(|dt| {
-                let start_of_day = dt
-                    .date()
-                    .and_hms_opt(0, 0, 0)
-                    .expect("failed to get start of day");
-                dt - start_of_day
-            })
-            .map(|delta| delta.num_minutes())
-            .sum();
+    let mut scored_groups = entries_by_group_id
+        .values()
+        .map(|entries| {
+            // score is the sum of minutes since the start of the day
+            let score: i64 = entries
+                .iter()
+                .map(|(e, _)| e.published_at.naive_utc())
+                .map(|dt| {
+                    let start_of_day = dt
+                        .date()
+                        .and_hms_opt(0, 0, 0)
+                        .expect("failed to get start of day");
+                    dt - start_of_day
+                })
+                .map(|delta| delta.num_minutes())
+                .sum();
+            let earliest_entry = entries
+                .iter()
+                .min_by(|a, b| a.0.published_at.cmp(&b.0.published_at))
+                .expect("entries must not be empty");
+            (earliest_entry, entries.len(), score)
+        })
+        .collect::<Vec<_>>();
+    scored_groups.sort_by(|a, b| b.1.cmp(&a.1));
 
-        gg.push((group.id, earliest_entry.clone(), entries.len(), score));
-    }
-
-    gg.sort_by(|a, b| b.3.cmp(&a.3));
+    let time = scored_groups[0].0 .0.published_at.with_timezone(&SWEDEN_TZ);
+    let title = format!("{} in Sweden", time.format("%A in Sweden"));
 
     let page = maud::html! {
         header {
             h2 {
-                time datetime=(report.created_at.to_rfc3339()) { (report.created_at.with_timezone(&SWEDEN_TZ).format("%A in Sweden")) }
+                time datetime=(time.to_rfc3339()) { (time.format("%A in Sweden")) }
             }
         }
         ol {
-            @for (group_id, (feed, entry, translation), entries_len, _) in gg {
+            @for ((entry, feed_title), size, _) in scored_groups {
                 li {
-                    a href=(entry.value.href) { (translation.value.value) }
+                    a href=(entry.href) { (entry.title) }
                     p {
-                        date time=(entry.value.published_at.to_rfc3339()) { (entry.value.published_at.with_timezone(&SWEDEN_TZ).format("%H:%M")) }
+                        date time=(entry.published_at.to_rfc3339()) { (entry.published_at.with_timezone(&SWEDEN_TZ).format("%H:%M")) }
                         " by "
-                        (feed.value.title)
+                        (feed_title)
                         " and "
-                        a href=(format!("/groups/{}", group_id)) {
-                            @if entries_len == 2 {
+                        a href=(format!("/groups/{}", entry.group_id)) {
+                            @if size == 2 {
                                 "1 other"
                             } @else {
-                                (entries_len - 1) " others"
+                                (size - 1) " others"
                             }
                         }
                     }
@@ -207,51 +202,39 @@ async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> 
         }
     };
 
-    let title = format!("{} in Sweden", report.created_at.format("%A"));
-
     Ok(Page::new(&title, page))
 }
 
 const SWEDEN_TZ: chrono_tz::Tz = chrono_tz::Europe::Stockholm;
 
+#[derive(Debug, sqlx::FromRow)]
+pub struct GroupEntryView {
+    pub group_id: Id<clustering::ReportGroup>,
+    pub title: String,
+    pub href: String,
+    pub published_at: chrono::DateTime<chrono::Utc>,
+    pub feed_id: Id<feeds::Feed>,
+}
+
 async fn render_group(
     State(state): State<AppState>,
     Path(params): Path<GroupParams>,
 ) -> Result<Page, ErrorPage> {
-    let group = state.db.find_group_by_id(&params.id).await?;
+    let groups = state
+        .db
+        .list_report_group_entries_by_id_lang_code(params.id, &feeds::LanguageCode::EN)
+        .await?;
 
-    let mut entries = vec![];
-    for embedding_id in &group.value.embedding_ids {
-        let embedding = state.db.find_embedding_by_id(embedding_id).await?;
-        let fields = state
-            .db
-            .list_fields_by_md5_hash(&embedding.value.md5_hash)
-            .await?;
-
-        for field in fields {
-            let entry = state.db.find_entry_by_id(&field.value.entry_id).await?;
-            let en_field = state
-                .db
-                .find_field_by_entry_id_name_lang_code(
-                    &field.value.entry_id,
-                    &feeds::FieldName::Title,
-                    &feeds::LanguageCode::EN,
-                )
-                .await?
-                .expect("translation must exist");
-            let translation = state
-                .db
-                .find_translation_by_md5_hash(&en_field.value.md5_hash)
-                .await?;
+    let groups = groups
+        .into_iter()
+        .map(|group| {
             let feed = feeds::LIST
                 .iter()
-                .find(|f| f.id == entry.value.feed_id)
+                .find(|f| f.id == group.feed_id)
                 .expect("feed must exist");
-            entries.push((feed, entry, translation.clone()));
-        }
-    }
-
-    entries.sort_by(|a, b| b.1.value.published_at.cmp(&a.1.value.published_at));
+            (group, feed.value.title.clone())
+        })
+        .collect::<Vec<_>>();
 
     let page = maud::html! {
         header {
@@ -262,22 +245,22 @@ async fn render_group(
             }
         }
         ol {
-            @for (feed, entry, translation) in &entries {
+            @for (group, feed_title) in &groups {
                 li {
-                    a href=(entry.value.href) { (translation.value.value) }
+                    a href=(group.href) { (group.title) }
                     p {
-                        time datetime=(entry.value.published_at.to_rfc3339()) { (entry.value.published_at.with_timezone(&SWEDEN_TZ).format("%H:%M")) }
+                        time datetime=(group.published_at.to_rfc3339()) { (group.published_at.with_timezone(&SWEDEN_TZ).format("%H:%M")) }
                         " by "
-                        (feed.value.title)
+                        (feed_title)
                     }
                 }
             }
         }
     };
 
-    let title = entries
+    let title = groups
         .last()
-        .map(|(_, _, translation)| translation.value.value.as_str())
+        .map(|(entry, _)| entry.title.as_str())
         .expect("at least one entry is always present in a group");
 
     Ok(Page::new(&title, page))

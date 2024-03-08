@@ -6,6 +6,24 @@ impl<T> From<u32> for Id<T> {
     }
 }
 
+impl<T> Eq for Id<T> {
+    fn assert_receiver_is_total_eq(&self) {
+        self.0.assert_receiver_is_total_eq()
+    }
+}
+
+impl<T> Ord for Id<T> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+
+impl<T> PartialOrd for Id<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.0.partial_cmp(&other.0)
+    }
+}
+
 impl<T> PartialEq for Id<T> {
     fn eq(&self, other: &Self) -> bool {
         self.0 == other.0

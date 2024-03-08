@@ -114,13 +114,6 @@ async fn dbscan(
             .cloned()
             .collect::<Vec<_>>();
 
-        tracing::info!(
-            min_points = min_points,
-            tolerance = tolerance,
-            score = ?silhouette_score, clusters_len = clustered_indices.len(),
-            "dbscan"
-        );
-
         let _ = send.send((clustered_indices, silhouette_score));
     });
 

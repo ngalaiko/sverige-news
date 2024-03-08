@@ -1,9 +1,10 @@
 use crate::{
-    clustering::{self, Embedding},
+    clustering::{self, Embedding, ReportGroup},
     feeds,
     id::Id,
     md5_hash::Md5Hash,
     persisted::Persisted,
+    web,
 };
 
 #[derive(Clone)]
@@ -264,88 +265,101 @@ impl Client {
     }
 
     #[tracing::instrument(skip(self))]
-    pub async fn find_latest_report(&self) -> Result<Persisted<clustering::Report>, sqlx::Error> {
-        sqlx::query_as("SELECT * FROM reports ORDER BY created_at DESC LIMIT 1")
-            .fetch_one(&self.pool)
+    pub async fn list_latest_report_group_entries_by_lang_code(
+        &self,
+        lang_code: &feeds::LanguageCode,
+    ) -> Result<Vec<web::GroupEntryView>, sqlx::Error> {
+        sqlx::query_as(
+            "
+            SELECT
+                entries.group_id AS group_id,
+                entries.href AS href,
+                entries.published_at AS published_at,
+                entries.feed_id AS feed_id,
+                translations.value AS title
+            FROM
+                fields
+                    JOIN translations ON translations.md5_hash = fields.md5_hash
+                    JOIN (
+                            SELECT
+                                entries.id AS id,
+                                report_group_embeddings.report_group_id AS group_id,
+                                entries.href AS href,
+                                entries.published_at AS published_at,
+                                entries.feed_id AS feed_id
+                            FROM
+                                report_group_embeddings
+                                    JOIN report_groups ON report_group_embeddings.report_group_id = report_groups.id
+                                    JOIN embeddings ON embeddings.id = report_group_embeddings.embedding_id
+                                    JOIN fields ON fields.md5_hash = embeddings.md5_hash
+                                    JOIN entries ON entries.id = fields.entry_id
+                            WHERE
+                                report_groups.report_id = (
+                                    SELECT
+                                        id
+                                    FROM
+                                        reports
+                                    ORDER BY
+                                        created_at DESC
+                                    LIMIT 1
+                                )
+                        ) AS entries ON entries.id = fields.entry_id
+            WHERE
+                fields.lang_code = ?
+                AND fields.name = 'title'
+            ORDER BY
+                entries.published_at DESC
+            ",
+        )
+            .bind(lang_code)
+            .fetch_all(&self.pool)
             .await
     }
 
     #[tracing::instrument(skip(self))]
-    pub async fn find_group_by_id(
+    pub async fn list_report_group_entries_by_id_lang_code(
         &self,
-        id: &Id<clustering::ReportGroup>,
-    ) -> Result<Persisted<clustering::ReportGroup>, sqlx::Error> {
-        use sqlx::Row;
-
-        let group_result = sqlx::query("SELECT * FROM report_groups WHERE id = ?")
-            .bind(id)
-            .fetch_one(&self.pool)
-            .await?;
-
-        let id = group_result.try_get("id")?;
-        let created_at: chrono::DateTime<chrono::Utc> = group_result.try_get("created_at")?;
-        let report_id = group_result.try_get("report_id")?;
-        Ok(Persisted {
-            id,
-            created_at,
-            value: clustering::ReportGroup {
-                report_id,
-                embedding_ids: self.list_embedding_ids_by_group_id(&id).await?,
-            },
-        })
-    }
-
-    #[tracing::instrument(skip(self))]
-    pub async fn list_groups_by_report_id(
-        &self,
-        report_id: &Id<clustering::Report>,
-    ) -> Result<Vec<Persisted<clustering::ReportGroup>>, sqlx::Error> {
-        use sqlx::Row;
-
-        let groups = sqlx::query("SELECT * FROM report_groups WHERE report_id = ?")
-            .bind(report_id)
-            .fetch_all(&self.pool)
-            .await?;
-
-        let mut result = Vec::with_capacity(groups.len());
-        for group in groups {
-            let id = group.try_get("id")?;
-            let created_at: chrono::DateTime<chrono::Utc> = group.try_get("created_at")?;
-            let value = clustering::ReportGroup {
-                report_id: *report_id,
-                embedding_ids: self.list_embedding_ids_by_group_id(&id).await?,
-            };
-            result.push(Persisted {
-                id,
-                created_at,
-                value,
-            });
-        }
-
-        Ok(result)
-    }
-
-    #[tracing::instrument(skip(self))]
-    pub async fn list_embedding_ids_by_group_id(
-        &self,
-        group_id: &Id<clustering::ReportGroup>,
-    ) -> Result<Vec<Id<clustering::Embedding>>, sqlx::Error> {
-        use sqlx::Row;
-
-        let rows = sqlx::query(
-            "SELECT embedding_id FROM report_group_embeddings WHERE report_group_id = ?",
+        id: Id<ReportGroup>,
+        lang_code: &feeds::LanguageCode,
+    ) -> Result<Vec<web::GroupEntryView>, sqlx::Error> {
+        sqlx::query_as(
+            "
+            SELECT
+                entries.group_id AS group_id,
+                entries.href AS href,
+                entries.published_at AS published_at,
+                entries.feed_id AS feed_id,
+                translations.value AS title
+            FROM
+                fields
+                    JOIN translations ON translations.md5_hash = fields.md5_hash
+                    JOIN (
+                            SELECT
+                                entries.id AS id,
+                                report_group_embeddings.report_group_id AS group_id,
+                                entries.href AS href,
+                                entries.published_at AS published_at,
+                                entries.feed_id AS feed_id
+                            FROM
+                                report_group_embeddings
+                                    JOIN report_groups ON report_group_embeddings.report_group_id = report_groups.id
+                                    JOIN embeddings ON embeddings.id = report_group_embeddings.embedding_id
+                                    JOIN fields ON fields.md5_hash = embeddings.md5_hash
+                                    JOIN entries ON entries.id = fields.entry_id
+                            WHERE
+                                report_group_embeddings.report_group_id = ?
+                        ) AS entries ON entries.id = fields.entry_id
+            WHERE
+                fields.lang_code = ?
+                AND fields.name = 'title'
+            ORDER BY
+                entries.published_at DESC
+            ",
         )
-        .bind(group_id)
+        .bind(id)
+        .bind(lang_code)
         .fetch_all(&self.pool)
-        .await?;
-
-        let mut result = Vec::with_capacity(rows.len());
-        for row in rows {
-            let id = row.try_get("embedding_id")?;
-            result.push(id);
-        }
-
-        Ok(result)
+        .await
     }
 }
 
