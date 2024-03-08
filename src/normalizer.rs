@@ -1,11 +1,9 @@
 pub fn normalize_sv(text: &str) -> String {
     let text = text.to_lowercase();
     let text = text.replace("\n", " ");
-    let text = text.replace("\n", " ");
     let words = text.split_whitespace();
 
     let words = words
-        .filter(|word| !word.chars().all(char::is_numeric))
         .flat_map(|word| {
             let mut gg = vec![vec![]];
             for c in word.chars() {
@@ -19,6 +17,8 @@ pub fn normalize_sv(text: &str) -> String {
             gg.into_iter()
                 .map(|chars| chars.into_iter().collect::<String>())
         })
+        .filter(|word| !word.chars().all(|c| c.is_ascii_punctuation()))
+        .filter(|word| !word.chars().all(char::is_numeric))
         .filter(|word| !word.is_empty())
         .filter(|word| !STOPWORDS_SV.contains(word.as_str()))
         .collect::<Vec<_>>();
