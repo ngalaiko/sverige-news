@@ -162,11 +162,12 @@ async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> 
                 })
                 .map(|delta| delta.num_minutes())
                 .sum();
-            let earliest_entry = entries
-                .iter()
-                .min_by(|a, b| a.0.published_at.cmp(&b.0.published_at))
-                .expect("entries must not be empty");
-            (earliest_entry, entries.len(), score)
+            dbg!(&entries);
+            let center_entry = entries
+                .into_iter()
+                .find(|(e, _)| e.is_center)
+                .expect("center is present");
+            (center_entry, entries.len(), score)
         })
         .collect::<Vec<_>>();
     scored_groups.sort_by(|a, b| b.1.cmp(&a.1));
@@ -210,6 +211,7 @@ const SWEDEN_TZ: chrono_tz::Tz = chrono_tz::Europe::Stockholm;
 #[derive(Debug, sqlx::FromRow)]
 pub struct GroupEntryView {
     pub group_id: Id<clustering::ReportGroup>,
+    pub is_center: bool,
     pub title: String,
     pub href: String,
     pub published_at: chrono::DateTime<chrono::Utc>,

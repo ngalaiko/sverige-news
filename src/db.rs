@@ -224,8 +224,11 @@ impl Client {
 
         let group_insert_result = transaction
             .fetch_one(
-                sqlx::query("INSERT INTO report_groups (report_id) VALUES (?) RETURNING id")
-                    .bind(group.report_id),
+                sqlx::query(
+                    "INSERT INTO report_groups (report_id, center_embedding_id) VALUES (?, ?) RETURNING id",
+                )
+                .bind(group.report_id)
+                .bind(group.center_embedding_id),
             )
             .await?;
         let group_id = group_insert_result.try_get("id")?;
@@ -273,6 +276,7 @@ impl Client {
             "
             SELECT
                 entries.group_id AS group_id,
+                entries.is_center AS is_center,
                 entries.href AS href,
                 entries.published_at AS published_at,
                 entries.feed_id AS feed_id,
@@ -283,6 +287,7 @@ impl Client {
                     JOIN (
                             SELECT
                                 entries.id AS id,
+                                (report_groups.center_embedding_id = embeddings.id) AS is_center,
                                 report_group_embeddings.report_group_id AS group_id,
                                 entries.href AS href,
                                 entries.published_at AS published_at,
@@ -326,6 +331,7 @@ impl Client {
             "
             SELECT
                 entries.group_id AS group_id,
+                entries.is_center AS is_center,
                 entries.href AS href,
                 entries.published_at AS published_at,
                 entries.feed_id AS feed_id,
@@ -337,6 +343,7 @@ impl Client {
                             SELECT
                                 entries.id AS id,
                                 report_group_embeddings.report_group_id AS group_id,
+                                (report_groups.center_embedding_id = embeddings.id) AS is_center,
                                 entries.href AS href,
                                 entries.published_at AS published_at,
                                 entries.feed_id AS feed_id

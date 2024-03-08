@@ -154,8 +154,9 @@ async fn generate_report(db: &db::Client, openai_client: &openai::Client) -> Res
     let (groups, (min_points, tolerance), score) =
         clustering::group_embeddings(&today_title_embeddings).await;
 
+    // ensure that all translations are available
     let translator = openai::Translator::new(openai_client);
-    futures::future::try_join_all(groups.iter().flatten().map(|id| {
+    futures::future::try_join_all(groups.iter().flat_map(|(group, _)| group).map(|id| {
         translate(
             db,
             &translator,
@@ -179,9 +180,10 @@ async fn generate_report(db: &db::Client, openai_client: &openai::Client) -> Res
         })
         .await?;
 
-    futures::future::try_join_all(groups.into_iter().map(|embedding_ids| {
+    futures::future::try_join_all(groups.into_iter().map(|(embedding_ids, center)| {
         db.insert_report_group(clustering::ReportGroup {
             report_id: report.id,
+            center_embedding_id: embedding_ids[center],
             embedding_ids,
         })
     }))
