@@ -162,7 +162,6 @@ async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> 
                 })
                 .map(|delta| delta.num_minutes())
                 .sum();
-            dbg!(&entries);
             let center_entry = entries
                 .into_iter()
                 .find(|(e, _)| e.is_center)
