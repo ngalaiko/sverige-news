@@ -163,7 +163,7 @@ async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> 
                 .map(|delta| delta.num_minutes())
                 .sum();
             let center_entry = entries
-                .into_iter()
+                .iter()
                 .find(|(e, _)| e.is_center)
                 .expect("center is present");
             (center_entry, entries.len(), score)
@@ -172,7 +172,7 @@ async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> 
     scored_groups.sort_by(|a, b| b.1.cmp(&a.1));
 
     let time = scored_groups[0].0 .0.published_at.with_timezone(&SWEDEN_TZ);
-    let title = format!("{} in Sweden", time.format("%A in Sweden"));
+    let title = time.format("%A in Sweden").to_string();
 
     let page = maud::html! {
         header {
@@ -264,7 +264,7 @@ async fn render_group(
         .map(|(entry, _)| entry.title.as_str())
         .expect("at least one entry is always present in a group");
 
-    Ok(Page::new(&title, page))
+    Ok(Page::new(title, page))
 }
 
 #[derive(RustEmbed)]
