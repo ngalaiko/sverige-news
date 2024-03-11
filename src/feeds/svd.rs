@@ -36,8 +36,15 @@ pub async fn crawl(
         .map(|feed| feed.entries)?;
     let entries = entries
         .iter()
-        .map(parse_entry)
-        .collect::<Result<Vec<_>, _>>()?;
+        .filter_map(|e| {
+            parse_entry(e)
+                .map_err(|error| {
+                    tracing::warn!(?error, "failed to parse svd entry");
+                    error
+                })
+                .ok()
+        })
+        .collect::<Vec<_>>();
     Ok(entries)
 }
 

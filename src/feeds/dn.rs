@@ -35,8 +35,15 @@ pub async fn crawl(
     let doc = Document::from(body);
     let entries = doc
         .find(Name("article").and(Class("direkt-post")))
-        .map(parse_entry)
-        .collect::<Result<Vec<_>, _>>()?;
+        .filter_map(|e| {
+            parse_entry(e)
+                .map_err(|error| {
+                    tracing::warn!(?error, "failed to parse dn entry");
+                    error
+                })
+                .ok()
+        })
+        .collect::<Vec<_>>();
 
     Ok(entries)
 }
