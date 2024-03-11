@@ -1,0 +1,97 @@
+<!doctype html>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="/css/pico.classless.yellow.min.css" />
+    <title>About</title>
+</head>
+
+<body>
+    <main>
+        <header>
+            <h2>About this website</h2>
+        </header>
+        <p>
+            This website is a simple swedish news aggregator that
+            <a href="https://nikita.galaiko.rocks" target="_blank">I</a>
+            have built for personal use.
+        </p>
+        <p>It works as follows:</p>
+        <ol>
+            <li>
+                Keeps track of a list of news sources by either downloading
+                their RSS or directly scraping websites.
+            </li>
+            <li>
+                Generates embeddings for each of the news article using OpenAI's
+                API. Embeddings are kind of meaning of the article encoded in
+                location in multi-dimentional space.
+            </li>
+            <li>
+                Groups those embeddings into clusters using DBSCAN algorithm. It
+                is a density based clustering algorithm that groups closely
+                located points into the same cluster.
+            </li>
+            <li>
+                For each cluster, it selects the most representative article
+                based on the distance to the center of the cluster.
+            </li>
+            <li>
+                Translates grouped articles into English using OpenAI's Chat
+                completion API.
+            </li>
+            <li>
+                Scores each group. The score is based on the number of articles
+                in the group and time when the article was published.
+            </li>
+            <li>
+                Displays the most representative article title for each group
+                along with the link to the original.
+            </li>
+        </ol>
+
+        <p>Current news sources:</p>
+        <ul>
+            <li>
+                <a href="https://www.abcnyheter.se" target="_blank"
+                    >ABC Nyheter</a
+                >
+            </li>
+            <li>
+                <a href="http:s//aftonbladet.se" target="_blank">Aftonblader</a>
+            </li>
+            <li><a href="https://dagen.se/" target="_blank">Dagen</a></li>
+            <li>
+                <a href="https://www.dn.se" target="_blank">Dagens Nyheter</a>
+            </li>
+            <li>
+                <a href="https://www.expressen.se" target="_blank">Expressen</a>
+            </li>
+            <li><a href="https://nkpg.news" target="_blank">Nkpg.news</a></li>
+            <li>
+                <a href="https://www.skaraborgsnyheter.se" target="_blank"
+                    >Skaraborgs Nyheter</a
+                >
+            </li>
+            <li>
+                <a href="https://www.svd.se" target="_blank"
+                    >Svenska Dagbladet</a
+                >
+            </li>
+            <li>
+                <a href="https://www.svt.se" target="_blank">SVT Nyheter</a>
+            </li>
+            <li>
+                <a href="https://www.tv4.se" target="_blank">TV4 Nyheterna</a>
+            </li>
+        </ul>
+
+        <p>
+            Have any suggestions?
+            <a href="mailto:nikita@galaiko.rocks">Email me</a> or consider
+            <a href="https://github.com/ngalaiko/sverige-news"
+                >contributing directly</a
+            >.
+        </p>
+    </main>
+</body>

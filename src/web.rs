@@ -75,6 +75,7 @@ impl axum::response::IntoResponse for Page {
             footer {
                 nav {
                     ul {
+                        li { a href="/about.html" { "About" } }
                         li { a href="https://github.com/ngalaiko/sverige-news" { "GitHub" } }
                     }
                 }
