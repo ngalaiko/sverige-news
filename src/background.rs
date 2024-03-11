@@ -32,7 +32,7 @@ pub async fn run(
 
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-#[tracing::instrument(skip_all)]
+#[tracing::instrument(level = "debug", skip_all)]
 async fn fetch(db: &db::Client, openai_client: &openai::Client) -> Result<(), Error> {
     crawl(db).await?;
     generate_embeddings(db, openai_client).await?;
@@ -41,7 +41,7 @@ async fn fetch(db: &db::Client, openai_client: &openai::Client) -> Result<(), Er
     Ok(())
 }
 
-#[tracing::instrument(skip_all)]
+#[tracing::instrument(level = "debug", skip_all)]
 async fn crawl(db: &db::Client) -> Result<(), Error> {
     let http_client = reqwest::ClientBuilder::new()
         .user_agent("svergie news crawler")
@@ -114,7 +114,7 @@ async fn crawl(db: &db::Client) -> Result<(), Error> {
     Ok(())
 }
 
-#[tracing::instrument(skip_all)]
+#[tracing::instrument(level = "debug", skip_all)]
 async fn generate_embeddings(db: &db::Client, openai_client: &openai::Client) -> Result<(), Error> {
     let translations_without_embeddings = db
         .list_translations_without_embeddings_by_lang_code_field_name_date(
@@ -141,7 +141,7 @@ async fn generate_embeddings(db: &db::Client, openai_client: &openai::Client) ->
     Ok(())
 }
 
-#[tracing::instrument(skip_all)]
+#[tracing::instrument(level = "debug", skip_all)]
 async fn generate_report(db: &db::Client, openai_client: &openai::Client) -> Result<(), Error> {
     let today_title_embeddings = db
         .list_embeddings_by_field_name_lang_code_date(
@@ -192,7 +192,7 @@ async fn generate_report(db: &db::Client, openai_client: &openai::Client) -> Res
     Ok(())
 }
 
-#[tracing::instrument(skip_all)]
+#[tracing::instrument(level = "debug", skip_all)]
 async fn translate(
     db: &db::Client,
     translator: &openai::Translator<'_>,

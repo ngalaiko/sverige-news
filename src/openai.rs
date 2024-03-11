@@ -4,7 +4,6 @@ use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{
     policies::ExponentialBackoff, RetryTransientMiddleware, Retryable, RetryableStrategy,
 };
-use reqwest_tracing::TracingMiddleware;
 
 #[derive(Clone)]
 pub struct Client {
@@ -49,7 +48,6 @@ impl Client {
                     retry_policy,
                     RetryStatusCodes::new(vec![reqwest::StatusCode::SERVICE_UNAVAILABLE]),
                 ))
-                .with(TracingMiddleware::default())
                 .build()
         };
         Self {
@@ -109,7 +107,7 @@ impl Client {
         }
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn embeddings(
         &self,
         input: &str,
@@ -173,7 +171,7 @@ impl<'a> Translator<'a> {
         Self { client }
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn translate_sv_to_en(
         &self,
         value: &str,

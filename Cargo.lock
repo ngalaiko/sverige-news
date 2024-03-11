@@ -2224,22 +2224,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "reqwest-tracing"
-version = "0.4.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a0152176687dd5cfe7f507ac1cb1a491c679cfe483afd133a7db7aaea818bb3"
-dependencies = [
- "anyhow",
- "async-trait",
- "getrandom",
- "matchit",
- "reqwest",
- "reqwest-middleware",
- "task-local-extensions",
- "tracing",
-]
-
-[[package]]
 name = "retry-policies"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2860,7 +2844,6 @@ dependencies = [
  "reqwest",
  "reqwest-middleware",
  "reqwest-retry",
- "reqwest-tracing",
  "rust-embed",
  "select",
  "serde",

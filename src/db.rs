@@ -26,7 +26,7 @@ impl Client {
 }
 
 impl Client {
-    #[tracing::instrument(skip_all, fields(href = %entry.href))]
+    #[tracing::instrument(level = "debug", skip_all, fields(href = %entry.href))]
     pub async fn insert_entry(
         &self,
         entry: &feeds::Entry,
@@ -41,7 +41,7 @@ impl Client {
         .await
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn find_entry_by_id(
         &self,
         id: &Id<feeds::Entry>,
@@ -54,7 +54,7 @@ impl Client {
 }
 
 impl Client {
-    #[tracing::instrument(skip_all, fields(entry_id = %field.entry_id, name = %field.name, lang_code = %field.lang_code, md5_hash = ?field.md5_hash))]
+    #[tracing::instrument(level = "debug", skip_all, fields(entry_id = %field.entry_id, name = %field.name, lang_code = %field.lang_code, md5_hash = ?field.md5_hash))]
     pub async fn insert_field(
         &self,
         field: feeds::Field,
@@ -82,7 +82,7 @@ impl Client {
             .await
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn list_fields_by_md5_hash(
         &self,
         md5_hash: &Md5Hash,
@@ -95,7 +95,7 @@ impl Client {
 }
 
 impl Client {
-    #[tracing::instrument(skip_all, fields(md5_hash = ?embedding.md5_hash, size = %embedding.size))]
+    #[tracing::instrument(level = "debug", skip_all, fields(md5_hash = ?embedding.md5_hash, size = %embedding.size))]
     pub async fn insert_embeddig(
         &self,
         embedding: &clustering::Embedding,
@@ -110,7 +110,7 @@ impl Client {
         .await
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn list_embeddings_by_field_name_lang_code_date(
         &self,
         field_name: feeds::FieldName,
@@ -143,7 +143,7 @@ impl Client {
         .await
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn find_embedding_by_id(
         &self,
         id: &Id<clustering::Embedding>,
@@ -156,7 +156,7 @@ impl Client {
 }
 
 impl Client {
-    #[tracing::instrument(skip_all, fields(md5_hash = ?transaslation.md5_hash))]
+    #[tracing::instrument(level = "debug", skip_all, fields(md5_hash = ?transaslation.md5_hash))]
     pub async fn insert_translation(
         &self,
         transaslation: feeds::Translation,
@@ -170,7 +170,7 @@ impl Client {
         .await
     }
 
-    #[tracing::instrument(skip(self), fields(md5_hash = ?md5_hash))]
+    #[tracing::instrument(level = "debug", skip(self), fields(md5_hash = ?md5_hash))]
     pub async fn find_translation_by_md5_hash(
         &self,
         md5_hash: &Md5Hash,
@@ -181,7 +181,7 @@ impl Client {
             .await
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn list_translations_without_embeddings_by_lang_code_field_name_date(
         &self,
         language_code: feeds::LanguageCode,
@@ -213,7 +213,7 @@ impl Client {
 }
 
 impl Client {
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn insert_report_group(
         &self,
         group: clustering::ReportGroup,
@@ -250,7 +250,7 @@ impl Client {
         })
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn insert_report(
         &self,
         report: &clustering::Report,
@@ -267,7 +267,7 @@ impl Client {
         .await
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn list_latest_report_group_entries_by_lang_code(
         &self,
         lang_code: &feeds::LanguageCode,
@@ -321,7 +321,7 @@ impl Client {
             .await
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn list_report_group_entries_by_id_lang_code(
         &self,
         id: Id<ReportGroup>,

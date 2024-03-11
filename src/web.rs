@@ -17,7 +17,7 @@ struct AppState {
     db: db::Client,
 }
 
-#[tracing::instrument(skip_all)]
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn serve(db: db::Client, address: &str) -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState { db };
     let router = Router::new()
@@ -34,8 +34,8 @@ pub async fn serve(db: db::Client, address: &str) -> Result<(), Box<dyn std::err
         )
         .layer(
             TraceLayer::new_for_http()
-                .make_span_with(trace::DefaultMakeSpan::new().level(Level::INFO))
-                .on_response(trace::DefaultOnResponse::new().level(Level::INFO)),
+                .make_span_with(trace::DefaultMakeSpan::new().level(Level::DEBUG))
+                .on_response(trace::DefaultOnResponse::new().level(Level::DEBUG)),
         );
     let listener = tokio::net::TcpListener::bind(address).await?;
     tracing::info!("listening on {}", listener.local_addr().unwrap());
