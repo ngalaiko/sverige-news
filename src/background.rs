@@ -151,6 +151,10 @@ async fn generate_report(db: &db::Client, openai_client: &openai::Client) -> Res
         )
         .await?;
 
+    if today_title_embeddings.is_empty() {
+        return Ok(());
+    }
+
     let (groups, (min_points, tolerance), score) =
         clustering::group_embeddings(&today_title_embeddings).await;
 
