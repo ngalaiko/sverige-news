@@ -103,7 +103,7 @@ impl Client {
         sqlx::query_as(
             "INSERT OR IGNORE INTO embeddings (md5_hash, value, size) VALUES ( ?, ?, ? ) RETURNING *",
         )
-        .bind(&embedding.md5_hash)
+        .bind(embedding.md5_hash)
         .bind(serde_json::to_string(&embedding.value).expect("failed to serialize embedding"))
         .bind(embedding.size)
         .fetch_optional(&self.pool)
@@ -268,10 +268,14 @@ impl Client {
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    pub async fn list_latest_report_group_entries_by_lang_code(
+    pub async fn list_report_group_entries_by_date_lang_code(
         &self,
+        date: chrono::NaiveDate,
         lang_code: &feeds::LanguageCode,
     ) -> Result<Vec<web::GroupEntryView>, sqlx::Error> {
+        let date = date
+            .and_hms_opt(0, 0, 0)
+            .expect("failed to create start of day");
         sqlx::query_as(
             "
             SELECT
@@ -304,21 +308,25 @@ impl Client {
                                         id
                                     FROM
                                         reports
+                                    WHERE
+                                        created_at >= DATETIME($1, 'start of day')
+                                            AND created_at < DATETIME($1, 'start of day', '+1 day')
                                     ORDER BY
                                         created_at DESC
                                     LIMIT 1
                                 )
                         ) AS entries ON entries.id = fields.entry_id
             WHERE
-                fields.lang_code = ?
+                fields.lang_code = $2
                 AND fields.name = 'title'
             ORDER BY
                 entries.published_at DESC
             ",
         )
-            .bind(lang_code)
-            .fetch_all(&self.pool)
-            .await
+        .bind(date)
+        .bind(lang_code)
+        .fetch_all(&self.pool)
+        .await
     }
 
     #[tracing::instrument(level = "debug", skip(self))]

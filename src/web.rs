@@ -4,11 +4,13 @@ use axum::http::Uri;
 use axum::response::{Html, IntoResponse};
 use axum::routing::get;
 use axum::Router;
+use chrono::TimeZone;
 use rust_embed::RustEmbed;
 use tower_http::compression::CompressionLayer;
 use tower_http::trace::{self, TraceLayer};
 use tracing::Level;
 
+use crate::clustering::ReportGroup;
 use crate::id::Id;
 use crate::{clustering, db, feeds};
 
@@ -22,6 +24,7 @@ pub async fn serve(db: db::Client, address: &str) -> Result<(), Box<dyn std::err
     let state = AppState { db };
     let router = Router::new()
         .route("/", get(render_index))
+        .route("/:year/:month/:day", get(render_index_for_date))
         .route("/groups/:id", get(render_group))
         .fallback(serve_asset)
         .with_state(state)
@@ -120,10 +123,33 @@ struct GroupParams {
     id: Id<clustering::ReportGroup>,
 }
 
+#[derive(serde::Deserialize)]
+struct DateParams {
+    year: i32,
+    month: u32,
+    day: u32,
+}
+
 async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> {
+    let date = chrono_tz::Europe::Stockholm
+        .from_utc_datetime(&chrono::Utc::now().naive_utc())
+        .date_naive();
+    render_entries(state, date).await
+}
+
+async fn render_index_for_date(
+    Path(params): Path<DateParams>,
+    State(state): State<AppState>,
+) -> Result<Page, ErrorPage> {
+    let date =
+        chrono::NaiveDate::from_ymd_opt(params.year, params.month, params.day).ok_or(NotFound)?;
+    render_entries(state, date).await
+}
+
+async fn render_entries(state: AppState, date: chrono::NaiveDate) -> Result<Page, ErrorPage> {
     let entries = state
         .db
-        .list_latest_report_group_entries_by_lang_code(&feeds::LanguageCode::EN)
+        .list_report_group_entries_by_date_lang_code(date, &feeds::LanguageCode::EN)
         .await?;
 
     let entries_feed_titles = entries
@@ -138,11 +164,9 @@ async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> 
         .collect::<Vec<_>>();
 
     let entries_by_group_id = entries_feed_titles.into_iter().fold(
-        std::collections::BTreeMap::new(),
+        std::collections::BTreeMap::<Id<ReportGroup>, Vec<(&GroupEntryView, String)>>::new(),
         |mut map, entry| {
-            map.entry(entry.0.group_id)
-                .or_insert_with(Vec::new)
-                .push(entry);
+            map.entry(entry.0.group_id).or_default().push(entry);
             map
         },
     );
@@ -172,7 +196,11 @@ async fn render_index(State(state): State<AppState>) -> Result<Page, ErrorPage> 
         .collect::<Vec<_>>();
     scored_groups.sort_by(|a, b| b.1.cmp(&a.1));
 
-    let time = scored_groups[0].0 .0.published_at.with_timezone(&SWEDEN_TZ);
+    let time = chrono_tz::Europe::Stockholm
+        .from_local_date(&date)
+        .single()
+        .ok_or(NotFound)?
+        .and_hms(0, 0, 0);
     let title = time.format("%A in Sweden").to_string();
 
     let page = maud::html! {
